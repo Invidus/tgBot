@@ -12,11 +12,11 @@ function getRandomInt(min, max) {
   return Math.floor(Math.random() * (max - min) + min); // Максимум не включается, минимум включается
 }
 
-export const getBreakFast = async (ctx) => {
+export const getLunch = async (ctx) => {
   try {
     const axiosResponse = await axios.request({
       method: "GET",
-      url: config.foodUrl + "/" + getRandomInt(1, 23),
+      url: config.lunchUrl + "/" + getRandomInt(1, 23),
       headers: {
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
@@ -32,14 +32,14 @@ export const getBreakFast = async (ctx) => {
         img: $(element).find("img").attr("src"),
         ccal: $(element).find(".info-preview  .level-left > span").text(),
         timeToCook: $(element).find(".info-preview  .level-right > span").text(),
-        productHeader: $(element).find(".info-preview > a.h5").text(),
         hrefOnProduct: "https://1000.menu" + $(element).find(".info-preview > a.h5").attr("href"),
+        productHeader: $(element).find(".info-preview > a.h5").text(),
         productDiscription: $(element).find(".info-preview > div.preview-text").text()
       }
 
 
       if (index === randomCard) {
-        if (dataObj.productHeader == "") {getBreakFast(ctx); return;}
+        if (dataObj.productHeader == "") {getLunch(ctx); return;}
         dataArr.push(dataObj);
         row = dataObj.productHeader  + "\nОписание: " + dataObj.productDiscription + "\n\nВремя приготовления блюда: "
         + dataObj.timeToCook + "\nКалорийность блюда на 100 г: " + dataObj.ccal + "\nСсылка на рецепт: " + dataObj.hrefOnProduct;
@@ -61,7 +61,7 @@ export const getBreakFast = async (ctx) => {
   }
 }
 
-export const getFullRecepie = async (ctx) => {
+export const getFullRecepieLunch = async (ctx) => {
   const axiosResponse = await axios.request({
     method: "GET",
     url: hrefOnProduct,
@@ -91,28 +91,29 @@ export const getFullRecepie = async (ctx) => {
 
 
 
-// todo рецепт с картинками
-  //   let pagination = new Pagination({ stebByStepRecepie });
-  //   let text = await pagination.text();
-  //   let keyboard = await pagination.keyboard();
-  //   if (stebByStepRecepie.length === 0 && imgArray.length === 0) {
-  //     var message = $('div.instructions > p').text();
-  //     ctx.reply(`${message}`);
-  //     //detailedMenu(bot, ctx.chat.id);
-  //   } else {
-  //     nextStep(imgArray, stebByStepRecepie, ctx);
-  //     pagination.handleActions(bot);
-  //   }
+// todo метод с картинками
+    // let pagination = new Pagination({ stebByStepRecepie });
+    // let text = await pagination.text();
+    // let keyboard = await pagination.keyboard();
+    // if (stebByStepRecepie.length === 0 && imgArray.length === 0) {
+    //   var message = $('div.instructions > p').text();
+    //   ctx.reply(`${message}`);
+    //   //detailedMenu(bot, ctx.chat.id);
+    // } else {
+    //   nextStep(imgArray, stebByStepRecepie, ctx);
+    //   // pagination.handleActions(bot);
+    // }
 
 
 
-  // return 1;
+  return 1;
 
   // const countCard = $("section#cooking > .cooking-block > .cn-item:not(.ads_enabled)").length;
 }
 
-// todo рецепт с картинками
-// const stepCounter = 0;
+
+const stepCounter = 0;
+// todo метод с картинками 
 // export const nextStep = function (imgArray, stebByStepRecepie, ctx) {
 //   for (var i = 0; i < stebByStepRecepie.length; i++) {
 //     ctx.replyWithPhoto({

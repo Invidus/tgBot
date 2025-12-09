@@ -1,18 +1,17 @@
 import { config } from "./config.js";
 import axios from "axios";
 import cheerio from "cheerio";
-import { detailedMenu, detailedCloseMenu, fullRecepie } from "./innerButtons.js";
+import { detailedMenu, detailedCloseMenu, fullRecepie, getDetailedMenuKeyboard } from "./innerButtons.js";
 import { Pagination } from  "telegraf-pagination";
 
 const dataArr = [];
-var hrefOnProduct;
 function getRandomInt(min, max) {
   min = Math.ceil(min);
   max = Math.floor(max);
   return Math.floor(Math.random() * (max - min) + min); // Максимум не включается, минимум включается
 }
 
-export const getBreakFast = async (ctx) => {
+export const getBreakFast = async (ctx, userHrefs) => {
   try {
     const axiosResponse = await axios.request({
       method: "GET",
@@ -39,11 +38,17 @@ export const getBreakFast = async (ctx) => {
 
 
       if (index === randomCard) {
-        if (dataObj.productHeader == "") {getBreakFast(ctx); return;}
+        if (dataObj.productHeader == "") {getBreakFast(ctx, userHrefs); return;}
         dataArr.push(dataObj);
         row = dataObj.productHeader  + "\nОписание: " + dataObj.productDiscription + "\n\nВремя приготовления блюда: "
         + dataObj.timeToCook + "\nКалорийность блюда на 100 г: " + dataObj.ccal + "\nСсылка на рецепт: " + dataObj.hrefOnProduct;
-        hrefOnProduct = dataObj.hrefOnProduct;
+
+        // Сохраняем hrefOnProduct в Map для текущего пользователя
+        const chatId = ctx.chat.id;
+        if (!userHrefs.has(chatId)) {
+          userHrefs.set(chatId, {});
+        }
+        userHrefs.get(chatId).breakfast = dataObj.hrefOnProduct;
       }
     })
     const scrapedData = {
@@ -61,7 +66,10 @@ export const getBreakFast = async (ctx) => {
   }
 }
 
-export const getFullRecepie = async (ctx) => {
+export const getFullRecepie = async (ctx, userHrefs) => {
+  const chatId = ctx.chat.id;
+  const hrefOnProduct = userHrefs.get(chatId)?.breakfast;
+
   if (!hrefOnProduct) {
     ctx.reply("Сначала выберите блюдо из меню.");
     return;
@@ -92,7 +100,7 @@ export const getFullRecepie = async (ctx) => {
       // }
 
     });
-    ctx.reply(`Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n`)
+    ctx.reply(`Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n`, getDetailedMenuKeyboard())
   } catch(error) {
     console.log(error);
     ctx.reply("Произошла ошибка при получении рецепта. Попробуйте выбрать другое блюдо.");

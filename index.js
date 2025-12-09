@@ -3,25 +3,48 @@ import { config } from "./config.js";
 import { getCat } from "./cat.js";
 import { getWeather } from "./weather.js";
 import { showMenu } from "./menu.js";
-import { detailedMenu, detailedCloseMenu, fullRecepie } from "./innerButtons.js";
+import { detailedMenu, detailedCloseMenu, fullRecepie, getDetailedMenuKeyboard } from "./innerButtons.js";
 import { getBreakFast, getFullRecepie } from "./breakfast.js";
 import { getDinner, getFullRecepieDinner } from "./dinner.js";
 import { getLunch, getFullRecepieLunch } from "./lunch.js";
 import { Pagination } from "telegraf-pagination";
 
+// Хранилище ссылок на рецепты для каждого пользователя: chatId -> { breakfast: url, lunch: url, dinner: url }
+const userHrefs = new Map();
 
 const bot = new Telegraf(config.telegramToken, {});
-var chatId;
-var state = 0;
+
+// Хранилище состояний пользователей: chatId -> state
+const userStates = new Map();
+
+// Вспомогательные функции для работы с состоянием
+const getUserState = (chatId) => {
+    return userStates.get(chatId) || 0;
+};
+
+const setUserState = (chatId, state) => {
+    userStates.set(chatId, state);
+};
+
+const resetUserState = (chatId) => {
+    userStates.set(chatId, 0);
+};
+
+// Вспомогательные функции для работы с hrefOnProduct
+const resetUserHrefs = (chatId) => {
+    userHrefs.delete(chatId);
+};
 
 bot.start((ctx) => {
-    chatId = ctx.chat.id;
+    const chatId = ctx.chat.id;
+    resetUserState(chatId);
+    resetUserHrefs(chatId);
     ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️')
     showMenu(bot, chatId);
 });
 
 bot.command("playlist", async (ctx) => {
-    const data = await getFullRecepie(ctx); // Replace this with your data retrieval logic
+    const data = await getFullRecepie(ctx, userHrefs); // Replace this with your data retrieval logic
     const pagination = new Pagination({
        data: data,
        header: (currentPage, pageSize, total) => `Nəsimi BR: 250* 299k\nPage ${currentPage} of ${total}`,
@@ -41,64 +64,68 @@ bot.command("playlist", async (ctx) => {
  });
 
 bot.on("message", async ctx => {
+    const chatId = ctx.chat.id;
+    const state = getUserState(chatId);
+
     if (ctx.message.text == "Завтрак🍏") {
-        let breakfast = await getBreakFast(ctx);
-        detailedMenu(bot, ctx.chat.id);
-        ctx.reply(breakfast + '');
-        state = 1;
+        let breakfast = await getBreakFast(ctx, userHrefs);
+        ctx.reply(breakfast + '', getDetailedMenuKeyboard());
+        setUserState(chatId, 1);
     } else if (ctx.message.text == "Обед🍜") {
-        state = 2;
-        let dinner = await getDinner(ctx);
-        detailedMenu(bot, ctx.chat.id);
-        ctx.reply(dinner + '');
+        setUserState(chatId, 2);
+        let dinner = await getDinner(ctx, userHrefs);
+        ctx.reply(dinner + '', getDetailedMenuKeyboard());
     } else if (ctx.message.text == "Ужин🍝") {
-        state = 3;
-        let lunch = await getLunch(ctx);
-        detailedMenu(bot, ctx.chat.id);
-        ctx.reply(lunch + '');
+        setUserState(chatId, 3);
+        let lunch = await getLunch(ctx, userHrefs);
+        ctx.reply(lunch + '', getDetailedMenuKeyboard());
     } else if (ctx.message.text == "Что нужно для приготовления🔎") {
         // Показываем список ингредиентов в зависимости от выбранного типа блюда
         switch (state) {
             case 1:
-                await getFullRecepie(ctx);
+                await getFullRecepie(ctx, userHrefs);
                 break;
             case 2:
-                await getFullRecepieDinner(ctx);
+                await getFullRecepieDinner(ctx, userHrefs);
                 break;
             case 3:
-                await getFullRecepieLunch(ctx);
+                await getFullRecepieLunch(ctx, userHrefs);
                 break;
             default:
                 ctx.reply("Сначала выберите завтрак, обед или ужин.");
                 break;
         }
-        detailedMenu(bot, ctx.chat.id);
+        // Клавиатура уже передается в функциях getFullRecepie*
     } else if (ctx.message.text == "Вернуться на главную↩️") {
-        showMenu(bot, ctx.chat.id);
+        resetUserState(chatId);
+        resetUserHrefs(chatId);
+        showMenu(bot, chatId);
     } else if (ctx.message.text == "Другое блюдо🔁") {
-        console.log(state);
+        console.log(`User ${chatId} state:`, state);
         switch (state) {
             case 1:
-                let breakfast = await getBreakFast(ctx);
+                let breakfast = await getBreakFast(ctx, userHrefs);
                 console.log(breakfast);
                 ctx.reply(breakfast + '');
                 break;
             case 2:
-                let dinner = await getDinner(ctx);
+                let dinner = await getDinner(ctx, userHrefs);
                 console.log(dinner);
                 ctx.reply(dinner + '');
                 break;
             case 3:
-                let lunch = await getLunch(ctx);
+                let lunch = await getLunch(ctx, userHrefs);
                 console.log(lunch);
                 ctx.reply(lunch + '');
                 break;
         }
     } else if (ctx.message.text == "Запуск✅") {
+        resetUserState(chatId);
+        resetUserHrefs(chatId);
         ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️')
-        showMenu(bot, ctx.chat.id);
+        showMenu(bot, chatId);
     } else if (ctx.message.text == "Закрыть❌") {
-        detailedCloseMenu(bot, ctx.chat.id);
+        detailedCloseMenu(bot, chatId);
     }
 })
 bot.launch()

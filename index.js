@@ -129,3 +129,14 @@ bot.on("message", async ctx => {
     }
 })
 bot.launch()
+  .then(() => {
+    console.log('✅ Бот успешно запущен!');
+  })
+  .catch((err) => {
+    console.error('❌ Ошибка при запуске бота:', err);
+    process.exit(1);
+  });
+
+// Graceful shutdown
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));

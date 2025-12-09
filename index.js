@@ -21,7 +21,7 @@ bot.start((ctx) => {
 });
 
 bot.command("playlist", async (ctx) => {
-    const data = await getFullRecepie(); // Replace this with your data retrieval logic
+    const data = await getFullRecepie(ctx); // Replace this with your data retrieval logic
     const pagination = new Pagination({
        data: data,
        header: (currentPage, pageSize, total) => `Nəsimi BR: 250* 299k\nPage ${currentPage} of ${total}`,
@@ -57,7 +57,21 @@ bot.on("message", async ctx => {
         detailedMenu(bot, ctx.chat.id);
         ctx.reply(lunch + '');
     } else if (ctx.message.text == "Что нужно для приготовления🔎") {
-        await getFullRecepie(ctx);
+        // Показываем список ингредиентов в зависимости от выбранного типа блюда
+        switch (state) {
+            case 1:
+                await getFullRecepie(ctx);
+                break;
+            case 2:
+                await getFullRecepieDinner(ctx);
+                break;
+            case 3:
+                await getFullRecepieLunch(ctx);
+                break;
+            default:
+                ctx.reply("Сначала выберите завтрак, обед или ужин.");
+                break;
+        }
         detailedMenu(bot, ctx.chat.id);
     } else if (ctx.message.text == "Вернуться на главную↩️") {
         showMenu(bot, ctx.chat.id);

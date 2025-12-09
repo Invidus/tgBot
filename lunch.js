@@ -62,31 +62,40 @@ export const getLunch = async (ctx) => {
 }
 
 export const getFullRecepieLunch = async (ctx) => {
-  const axiosResponse = await axios.request({
-    method: "GET",
-    url: hrefOnProduct,
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
-    }
-  })
-  const $ = cheerio.load(axiosResponse.data);
+  if (!hrefOnProduct) {
+    ctx.reply("Сначала выберите блюдо из меню.");
+    return;
+  }
+  try {
+    const axiosResponse = await axios.request({
+      method: "GET",
+      url: hrefOnProduct,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+      }
+    })
+    const $ = cheerio.load(axiosResponse.data);
 
-  var portion = $('#yield_num_input').attr().value;
-  var recepieList = [];
-  var stebByStepRecepie = [];
-  var imgArray = [];
-  $('#recept-list > div.ingredient meta').each((index, element) => {
-    recepieList.push($(element).attr("content"));
-    // const dataObjRecepie = {
-    //   ingredient: element
-    //    ingredientName: $(element).find("a.name").text(),
-    //    discriptionName: $(element).find("span.ingredient-info").text(),
-    //    piece: $(element).find("span.ingredient-info").text(),
+    var portion = $('#yield_num_input').attr('value') || 'не указано';
+    var recepieList = [];
+    var stebByStepRecepie = [];
+    var imgArray = [];
+    $('#recept-list > div.ingredient meta').each((index, element) => {
+      recepieList.push($(element).attr("content"));
+      // const dataObjRecepie = {
+      //   ingredient: element
+      //    ingredientName: $(element).find("a.name").text(),
+      //    discriptionName: $(element).find("span.ingredient-info").text(),
+      //    piece: $(element).find("span.ingredient-info").text(),
 
-    // }
+      // }
 
-  });
-  ctx.reply(`Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n`)
+    });
+    ctx.reply(`Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n`)
+  } catch(error) {
+    console.log(error);
+    ctx.reply("Произошла ошибка при получении рецепта. Попробуйте выбрать другое блюдо.");
+  }
 
 
 
@@ -113,7 +122,7 @@ export const getFullRecepieLunch = async (ctx) => {
 
 
 const stepCounter = 0;
-// todo метод с картинками 
+// todo метод с картинками
 // export const nextStep = function (imgArray, stebByStepRecepie, ctx) {
 //   for (var i = 0; i < stebByStepRecepie.length; i++) {
 //     ctx.replyWithPhoto({

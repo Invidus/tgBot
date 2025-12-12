@@ -1,13 +1,15 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
-import { getCat } from "./cat.js";
-import { getWeather } from "./weather.js";
 import { showMenu } from "./menu.js";
 import { detailedMenu, detailedCloseMenu, fullRecepie, getDetailedMenuKeyboard } from "./innerButtons.js";
 import { getBreakFast, getFullRecepie } from "./breakfast.js";
 import { getDinner, getFullRecepieDinner } from "./dinner.js";
 import { getLunch, getFullRecepieLunch } from "./lunch.js";
 import { Pagination } from "telegraf-pagination";
+
+// TTL(time to live) очистка старых записей
+const USER_DATA_TTL = 24 * 60 * 60 * 1000;
+const userLastActivity = new Map(); // Отслеживание последней активности
 
 // Хранилище ссылок на рецепты для каждого пользователя: chatId -> { breakfast: url, lunch: url, dinner: url }
 const userHrefs = new Map();
@@ -34,6 +36,23 @@ const resetUserState = (chatId) => {
 const resetUserHrefs = (chatId) => {
     userHrefs.delete(chatId);
 };
+// Функция очистки старых данных
+const cleanupOldUsers = () => {
+    const now = Date.now();
+    for (const [chatId, lastActivity] of userLastActivity.entries()) {
+      if (now - lastActivity > USER_DATA_TTL) {
+        userStates.delete(chatId);
+        userHrefs.delete(chatId);
+        userLastActivity.delete(chatId);
+      }
+    }
+  };
+  // Запускать очистку каждые 6 часов
+setInterval(cleanupOldUsers, 6 * 60 * 60 * 1000);
+// Обновлять lastActivity при каждом взаимодействии
+const updateUserActivity = (chatId) => {
+    userLastActivity.set(chatId, Date.now());
+  };
 
 bot.start((ctx) => {
     const chatId = ctx.chat.id;
@@ -65,6 +84,7 @@ bot.command("playlist", async (ctx) => {
 
 bot.on("message", async ctx => {
     const chatId = ctx.chat.id;
+    updateUserActivity(chatId);
     const state = getUserState(chatId);
 
     if (ctx.message.text == "Завтрак🍏") {

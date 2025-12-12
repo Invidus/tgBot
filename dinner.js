@@ -62,7 +62,7 @@ export const getDinner = async (ctx, userHrefs) => {
     return row;
   } catch(error) {
     console.log(error);
-    return error;
+    return 'Произошла ошибка при получении рецепта. Попробуйте позже.';
   }
 }
 

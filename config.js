@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -21,34 +21,16 @@ for (const path of envPaths) {
   }
 }
 
-// Отладочная информация
-console.log('🔍 Ищем .env файл...');
-console.log('📁 __dirname:', __dirname);
-console.log('📁 process.cwd():', process.cwd());
-console.log('📄 Найден .env по пути:', envPath || 'НЕ НАЙДЕН');
-
 if (envPath) {
-  // Проверяем содержимое файла
-  try {
-    const envContent = readFileSync(envPath, 'utf8');
-    const lines = envContent.split('\n').filter(line => line.trim() && !line.trim().startsWith('#'));
-    console.log('📝 Строк в .env:', lines.length);
-    console.log('📝 Первые строки:', lines.slice(0, 3).join(', '));
-  } catch (err) {
-    console.error('❌ Ошибка чтения .env:', err.message);
-  }
-
-  const result = dotenv.config({ path: envPath });
+  // Загружаем .env с подавлением предупреждений
+  const result = dotenv.config({ path: envPath, quiet: true });
 
   if (result.error) {
-    console.error('❌ Ошибка dotenv:', result.error);
-  } else {
-    console.log('✅ dotenv загружен успешно');
-    console.log('🔑 Найдено переменных:', Object.keys(result.parsed || {}).length);
+    console.error('❌ Ошибка загрузки .env:', result.error);
   }
 } else {
-  console.warn('⚠️ Файл .env не найден, используем переменные окружения системы');
-  dotenv.config(); // Пробуем загрузить из текущей директории
+  // Если файл не найден, пробуем загрузить из текущей директории
+  dotenv.config({ quiet: true });
 }
 
 if (!process.env.TELEGRAM_TOKEN) {

@@ -1,6 +1,12 @@
 import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Указываем явный путь к .env файлу
+dotenv.config({ path: join(__dirname, '.env') });
 
 if (!process.env.TELEGRAM_TOKEN) {
   console.error('❌ ОШИБКА: TELEGRAM_TOKEN не установлен в переменных окружения!');

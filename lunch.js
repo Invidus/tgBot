@@ -27,6 +27,8 @@ export const getLunch = async (ctx, userHrefs, retryCount = 0) => {
     var row = "";
     const countCard = $("section#cooking > .cooking-block > .cn-item:not(.ads_enabled)").length;
     const randomCard = getRandomInt(1, countCard);
+    let foundData = null;
+
     $("section#cooking > .cooking-block > .cn-item:not(.ads_enabled)").each((index, element) => {
       const dataObj = {
         img: $(element).find("img").attr("src"),
@@ -37,27 +39,30 @@ export const getLunch = async (ctx, userHrefs, retryCount = 0) => {
         productDiscription: $(element).find(".info-preview > div.preview-text").text()
       }
 
-
       if (index === randomCard) {
-        if (dataObj.productHeader == "") {
-          if (retryCount < MAX_RETRIES) {
-            return await getLunch(ctx, userHrefs, retryCount + 1);
-          } else {
-            return "К сожалению, не удалось найти подходящее блюдо. Попробуйте позже.";
-          }
-        }
-        dataArr.push(dataObj);
-        row = dataObj.productHeader  + "\nОписание: " + dataObj.productDiscription + "\n\nВремя приготовления блюда: "
-        + dataObj.timeToCook + "\nКалорийность блюда на 100 г: " + dataObj.ccal + "\nСсылка на рецепт: " + dataObj.hrefOnProduct;
-
-        // Сохраняем hrefOnProduct в Map для текущего пользователя
-        const chatId = ctx.chat.id;
-        if (!userHrefs.has(chatId)) {
-          userHrefs.set(chatId, {});
-        }
-        userHrefs.get(chatId).lunch = dataObj.hrefOnProduct;
+        foundData = dataObj;
       }
     })
+
+    // Проверяем найденные данные после цикла
+    if (!foundData || foundData.productHeader == "") {
+      if (retryCount < MAX_RETRIES) {
+        return await getLunch(ctx, userHrefs, retryCount + 1);
+      } else {
+        return "К сожалению, не удалось найти подходящее блюдо. Попробуйте позже.";
+      }
+    }
+
+    dataArr.push(foundData);
+    row = foundData.productHeader  + "\nОписание: " + foundData.productDiscription + "\n\nВремя приготовления блюда: "
+    + foundData.timeToCook + "\nКалорийность блюда на 100 г: " + foundData.ccal + "\nСсылка на рецепт: " + foundData.hrefOnProduct;
+
+    // Сохраняем hrefOnProduct в Map для текущего пользователя
+    const chatId = ctx.chat.id;
+    if (!userHrefs.has(chatId)) {
+      userHrefs.set(chatId, {});
+    }
+    userHrefs.get(chatId).lunch = foundData.hrefOnProduct;
     const scrapedData = {
       dataArr: dataArr
     }
@@ -111,28 +116,6 @@ export const getFullRecepieLunch = async (ctx, userHrefs) => {
     console.log(error);
     ctx.reply("Произошла ошибка при получении рецепта. Попробуйте выбрать другое блюдо.");
   }
-
-
-
-
-// todo метод с картинками
-    // let pagination = new Pagination({ stebByStepRecepie });
-    // let text = await pagination.text();
-    // let keyboard = await pagination.keyboard();
-    // if (stebByStepRecepie.length === 0 && imgArray.length === 0) {
-    //   var message = $('div.instructions > p').text();
-    //   ctx.reply(`${message}`);
-    //   //detailedMenu(bot, ctx.chat.id);
-    // } else {
-    //   nextStep(imgArray, stebByStepRecepie, ctx);
-    //   // pagination.handleActions(bot);
-    // }
-
-
-
-  return 1;
-
-  // const countCard = $("section#cooking > .cooking-block > .cn-item:not(.ads_enabled)").length;
 }
 
 

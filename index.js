@@ -55,11 +55,20 @@ const updateUserActivity = (chatId) => {
     userLastActivity.set(chatId, Date.now());
   };
 
-  bot.start((ctx) => {
+  bot.start(async (ctx) => {
     const chatId = ctx.chat.id;
     resetUserState(chatId);
     resetUserHrefs(chatId);
-    ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️', {
+
+    // Сначала удаляем старую reply keyboard
+    await ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️', {
+        reply_markup: {
+            remove_keyboard: true
+        }
+    });
+
+    // Затем отправляем inline-кнопки
+    await ctx.reply("Выберите действие", {
         reply_markup: {
             inline_keyboard: [
                 [{ text: "Завтрак🍏", callback_data: "breakfast" }],
@@ -90,6 +99,15 @@ bot.command("playlist", async (ctx) => {
     let keyboard = await pagination.keyboard();
     ctx.reply(text, keyboard);
  });
+
+// Команда для удаления reply keyboard
+bot.command("removekeyboard", async (ctx) => {
+    await ctx.reply("Клавиатура удалена", {
+        reply_markup: {
+            remove_keyboard: true
+        }
+    });
+});
 
  // Обработка inline-кнопок
 bot.action("breakfast", async (ctx) => {
@@ -201,7 +219,16 @@ bot.action("start_bot", async (ctx) => {
     const chatId = ctx.chat.id;
     resetUserState(chatId);
     resetUserHrefs(chatId);
-    await ctx.editMessageText('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️', {
+
+    // Удаляем reply keyboard через отдельное сообщение
+    await ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️', {
+        reply_markup: {
+            remove_keyboard: true
+        }
+    });
+
+    // Отправляем inline-кнопки
+    await ctx.reply("Выберите действие", {
         reply_markup: {
             inline_keyboard: [
                 [{ text: "Завтрак🍏", callback_data: "breakfast" }],

@@ -11,7 +11,8 @@ function getRandomInt(min, max) {
   return Math.floor(Math.random() * (max - min) + min); // Максимум не включается, минимум включается
 }
 
-export const getLunch = async (ctx, userHrefs) => {
+export const getLunch = async (ctx, userHrefs, retryCount = 0) => {
+  const MAX_RETRIES = 5; // Максимум 5 попыток, защита от переполнения стека
   try {
     const axiosResponse = await axios.request({
       method: "GET",
@@ -38,7 +39,13 @@ export const getLunch = async (ctx, userHrefs) => {
 
 
       if (index === randomCard) {
-        if (dataObj.productHeader == "") {getLunch(ctx, userHrefs); return;}
+        if (dataObj.productHeader == "") {
+          if (retryCount < MAX_RETRIES) {
+            return await getLunch(ctx, userHrefs, retryCount + 1);
+          } else {
+            return "К сожалению, не удалось найти подходящее блюдо. Попробуйте позже.";
+          }
+        }
         dataArr.push(dataObj);
         row = dataObj.productHeader  + "\nОписание: " + dataObj.productDiscription + "\n\nВремя приготовления блюда: "
         + dataObj.timeToCook + "\nКалорийность блюда на 100 г: " + dataObj.ccal + "\nСсылка на рецепт: " + dataObj.hrefOnProduct;

@@ -6,6 +6,7 @@ import { getBreakFast, getFullRecepie } from "./breakfast.js";
 import { getDinner, getFullRecepieDinner } from "./dinner.js";
 import { getLunch, getFullRecepieLunch } from "./lunch.js";
 import { Pagination } from "telegraf-pagination";
+import { Markup } from "telegraf";
 
 // TTL(time to live) очистка старых записей
 const USER_DATA_TTL = 24 * 60 * 60 * 1000;
@@ -54,12 +55,20 @@ const updateUserActivity = (chatId) => {
     userLastActivity.set(chatId, Date.now());
   };
 
-bot.start((ctx) => {
+  bot.start((ctx) => {
     const chatId = ctx.chat.id;
     resetUserState(chatId);
     resetUserHrefs(chatId);
-    ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️')
-    showMenu(bot, chatId);
+    ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️', {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: "Завтрак🍏", callback_data: "breakfast" }],
+                [{ text: "Обед🍜", callback_data: "dinner" }],
+                [{ text: "Ужин🍝", callback_data: "lunch" }],
+                [{ text: "Закрыть❌", callback_data: "close_menu" }]
+            ]
+        }
+    });
 });
 
 bot.command("playlist", async (ctx) => {
@@ -82,72 +91,138 @@ bot.command("playlist", async (ctx) => {
     ctx.reply(text, keyboard);
  });
 
-bot.on("message", async ctx => {
+ // Обработка inline-кнопок
+bot.action("breakfast", async (ctx) => {
+    const chatId = ctx.chat.id;
+    updateUserActivity(chatId);
+    let breakfast = await getBreakFast(ctx, userHrefs);
+    await ctx.editMessageText(breakfast, getDetailedMenuKeyboard());
+    setUserState(chatId, 1);
+    await ctx.answerCbQuery();
+});
+
+bot.action("dinner", async (ctx) => {
+    const chatId = ctx.chat.id;
+    updateUserActivity(chatId);
+    setUserState(chatId, 2);
+    let dinner = await getDinner(ctx, userHrefs);
+    await ctx.editMessageText(dinner, getDetailedMenuKeyboard());
+    await ctx.answerCbQuery();
+});
+
+bot.action("lunch", async (ctx) => {
+    const chatId = ctx.chat.id;
+    updateUserActivity(chatId);
+    setUserState(chatId, 3);
+    let lunch = await getLunch(ctx, userHrefs);
+    await ctx.editMessageText(lunch, getDetailedMenuKeyboard());
+    await ctx.answerCbQuery();
+});
+
+bot.action("another_dish", async (ctx) => {
+    const chatId = ctx.chat.id;
+    updateUserActivity(chatId);
+    const state = getUserState(chatId);
+    console.log(`User ${chatId} state:`, state);
+
+    let messageText = "";
+    switch (state) {
+        case 1:
+            messageText = await getBreakFast(ctx, userHrefs);
+            break;
+        case 2:
+            messageText = await getDinner(ctx, userHrefs);
+            break;
+        case 3:
+            messageText = await getLunch(ctx, userHrefs);
+            break;
+        default:
+            await ctx.answerCbQuery("Сначала выберите тип блюда");
+            return;
+    }
+
+    await ctx.editMessageText(messageText, getDetailedMenuKeyboard());
+    await ctx.answerCbQuery();
+});
+
+bot.action("ingredients", async (ctx) => {
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
     const state = getUserState(chatId);
 
-    if (ctx.message.text == "Завтрак🍏") {
-        let breakfast = await getBreakFast(ctx, userHrefs);
-        ctx.reply(breakfast + '', getDetailedMenuKeyboard());
-        setUserState(chatId, 1);
-    } else if (ctx.message.text == "Обед🍜") {
-        setUserState(chatId, 2);
-        let dinner = await getDinner(ctx, userHrefs);
-        ctx.reply(dinner + '', getDetailedMenuKeyboard());
-    } else if (ctx.message.text == "Ужин🍝") {
-        setUserState(chatId, 3);
-        let lunch = await getLunch(ctx, userHrefs);
-        ctx.reply(lunch + '', getDetailedMenuKeyboard());
-    } else if (ctx.message.text == "Что нужно для приготовления🔎") {
-        // Показываем список ингредиентов в зависимости от выбранного типа блюда
-        switch (state) {
-            case 1:
-                await getFullRecepie(ctx, userHrefs);
-                break;
-            case 2:
-                await getFullRecepieDinner(ctx, userHrefs);
-                break;
-            case 3:
-                await getFullRecepieLunch(ctx, userHrefs);
-                break;
-            default:
-                ctx.reply("Сначала выберите завтрак, обед или ужин.");
-                break;
-        }
-        // Клавиатура уже передается в функциях getFullRecepie*
-    } else if (ctx.message.text == "Вернуться на главную↩️") {
-        resetUserState(chatId);
-        resetUserHrefs(chatId);
-        showMenu(bot, chatId);
-    } else if (ctx.message.text == "Другое блюдо🔁") {
-        console.log(`User ${chatId} state:`, state);
-        switch (state) {
-            case 1:
-                let breakfast = await getBreakFast(ctx, userHrefs);
-                console.log(breakfast);
-                ctx.reply(breakfast + '');
-                break;
-            case 2:
-                let dinner = await getDinner(ctx, userHrefs);
-                console.log(dinner);
-                ctx.reply(dinner + '');
-                break;
-            case 3:
-                let lunch = await getLunch(ctx, userHrefs);
-                console.log(lunch);
-                ctx.reply(lunch + '');
-                break;
-        }
-    } else if (ctx.message.text == "Запуск✅") {
-        resetUserState(chatId);
-        resetUserHrefs(chatId);
-        ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️')
-        showMenu(bot, chatId);
-    } else if (ctx.message.text == "Закрыть❌") {
-        detailedCloseMenu(bot, chatId);
+    switch (state) {
+        case 1:
+            await getFullRecepie(ctx, userHrefs);
+            break;
+        case 2:
+            await getFullRecepieDinner(ctx, userHrefs);
+            break;
+        case 3:
+            await getFullRecepieLunch(ctx, userHrefs);
+            break;
+        default:
+            await ctx.reply("Сначала выберите завтрак, обед или ужин.");
+            break;
     }
-})
+    await ctx.answerCbQuery();
+});
+
+bot.action("back_to_main", async (ctx) => {
+    const chatId = ctx.chat.id;
+    updateUserActivity(chatId);
+    resetUserState(chatId);
+    resetUserHrefs(chatId);
+    await ctx.editMessageText("Выберите действие", {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: "Завтрак🍏", callback_data: "breakfast" }],
+                [{ text: "Обед🍜", callback_data: "dinner" }],
+                [{ text: "Ужин🍝", callback_data: "lunch" }],
+                [{ text: "Закрыть❌", callback_data: "close_menu" }]
+            ]
+        }
+    });
+    await ctx.answerCbQuery();
+});
+
+bot.action("close_menu", async (ctx) => {
+    const chatId = ctx.chat.id;
+    await ctx.editMessageText("Меню закрыто", {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: "Запуск✅", callback_data: "start_bot" }]
+            ]
+        }
+    });
+    await ctx.answerCbQuery();
+});
+
+bot.action("start_bot", async (ctx) => {
+    const chatId = ctx.chat.id;
+    resetUserState(chatId);
+    resetUserHrefs(chatId);
+    await ctx.editMessageText('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️', {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: "Завтрак🍏", callback_data: "breakfast" }],
+                [{ text: "Обед🍜", callback_data: "dinner" }],
+                [{ text: "Ужин🍝", callback_data: "lunch" }],
+                [{ text: "Закрыть❌", callback_data: "close_menu" }]
+            ]
+        }
+    });
+    await ctx.answerCbQuery();
+});
+
+bot.on("message", async ctx => {
+    const chatId = ctx.chat.id;
+    updateUserActivity(chatId);
+
+    // Обрабатывать только текстовые сообщения, не связанные с кнопками
+    // Кнопки теперь обрабатываются через bot.action()
+
+    // Если нужно обрабатывать команды или другие текстовые сообщения, добавьте их здесь
+});
 bot.launch()
   .then(() => {
     console.log('✅ Бот успешно запущен!');

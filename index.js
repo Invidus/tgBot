@@ -293,6 +293,13 @@ bot.on("message", async ctx => {
         console.log('🔍 Получен поисковый запрос:', searchQuery, 'от пользователя', chatId);
         if (searchQuery) {
             try {
+                // Удаляем reply keyboard после ввода запроса
+                await ctx.reply("", {
+                    reply_markup: {
+                        remove_keyboard: true
+                    }
+                });
+
                 // Сохраняем поисковый запрос для повторного использования
                 userSearchQueries.set(chatId, searchQuery);
 

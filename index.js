@@ -122,7 +122,15 @@ bot.action("breakfast", async (ctx) => {
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
     let breakfast = await getBreakFast(ctx, userHrefs);
-    await ctx.editMessageText(breakfast, getDetailedMenuKeyboard());
+    try {
+        await ctx.editMessageText(breakfast, getDetailedMenuKeyboard());
+    } catch (error) {
+        if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
+            await ctx.answerCbQuery("Показан тот же результат. Попробуйте еще раз.");
+        } else {
+            await ctx.reply(breakfast, getDetailedMenuKeyboard());
+        }
+    }
     setUserState(chatId, 1);
     await ctx.answerCbQuery();
 });
@@ -133,7 +141,15 @@ bot.action("dinner", async (ctx) => {
     updateUserActivity(chatId);
     setUserState(chatId, 2);
     let dinner = await getDinner(ctx, userHrefs);
-    await ctx.editMessageText(dinner, getDetailedMenuKeyboard());
+    try {
+        await ctx.editMessageText(dinner, getDetailedMenuKeyboard());
+    } catch (error) {
+        if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
+            await ctx.answerCbQuery("Показан тот же результат. Попробуйте еще раз.");
+        } else {
+            await ctx.reply(dinner, getDetailedMenuKeyboard());
+        }
+    }
     await ctx.answerCbQuery();
 });
 
@@ -143,7 +159,15 @@ bot.action("lunch", async (ctx) => {
     updateUserActivity(chatId);
     setUserState(chatId, 3);
     let lunch = await getLunch(ctx, userHrefs);
-    await ctx.editMessageText(lunch, getDetailedMenuKeyboard());
+    try {
+        await ctx.editMessageText(lunch, getDetailedMenuKeyboard());
+    } catch (error) {
+        if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
+            await ctx.answerCbQuery("Показан тот же результат. Попробуйте еще раз.");
+        } else {
+            await ctx.reply(lunch, getDetailedMenuKeyboard());
+        }
+    }
     await ctx.answerCbQuery();
 });
 
@@ -152,7 +176,15 @@ bot.action("search", async (ctx) => {
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
     setUserState(chatId, 4);
-    await ctx.editMessageText("Напишите что хотите найти: например ПП ужин, спаггети с креветками и т.п.", getSearchKeyboard());
+    try {
+        await ctx.editMessageText("Напишите что хотите найти: например ПП ужин, спаггети с креветками и т.п.", getSearchKeyboard());
+    } catch (error) {
+        if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
+            // Сообщение уже такое же, это нормально
+        } else {
+            await ctx.reply("Напишите что хотите найти: например ПП ужин, спаггети с креветками и т.п.", getSearchKeyboard());
+        }
+    }
 });
 
 bot.action("another_dish", async (ctx) => {
@@ -195,7 +227,17 @@ bot.action("another_dish", async (ctx) => {
             return;
     }
 
-    await ctx.editMessageText(messageText, getDetailedMenuKeyboard());
+    try {
+        await ctx.editMessageText(messageText, getDetailedMenuKeyboard());
+    } catch (error) {
+        // Если сообщение не изменилось (такой же результат), это нормально
+        if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
+            await ctx.answerCbQuery("Показан тот же результат. Попробуйте еще раз.");
+        } else {
+            // Другая ошибка - отправляем новое сообщение
+            await ctx.reply(messageText, getDetailedMenuKeyboard());
+        }
+    }
     await ctx.answerCbQuery();
 });
 
@@ -229,29 +271,61 @@ bot.action("back_to_main", async (ctx) => {
     updateUserActivity(chatId);
     resetUserState(chatId);
     resetUserHrefs(chatId);
-    await ctx.editMessageText("Выберите действие", {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: "Завтрак🍏", callback_data: "breakfast" }],
-                [{ text: "Обед🍜", callback_data: "dinner" }],
-                [{ text: "Ужин🍝", callback_data: "lunch" }],
-                [{ text: "Поиск🔎", callback_data: "search" }],
-                [{ text: "Закрыть❌", callback_data: "close_menu" }]
-            ]
+    try {
+        await ctx.editMessageText("Выберите действие", {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "Завтрак🍏", callback_data: "breakfast" }],
+                    [{ text: "Обед🍜", callback_data: "dinner" }],
+                    [{ text: "Ужин🍝", callback_data: "lunch" }],
+                    [{ text: "Поиск🔎", callback_data: "search" }],
+                    [{ text: "Закрыть❌", callback_data: "close_menu" }]
+                ]
+            }
+        });
+    } catch (error) {
+        if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
+            // Сообщение уже такое же, это нормально
+        } else {
+            await ctx.reply("Выберите действие", {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "Завтрак🍏", callback_data: "breakfast" }],
+                        [{ text: "Обед🍜", callback_data: "dinner" }],
+                        [{ text: "Ужин🍝", callback_data: "lunch" }],
+                        [{ text: "Поиск🔎", callback_data: "search" }],
+                        [{ text: "Закрыть❌", callback_data: "close_menu" }]
+                    ]
+                }
+            });
         }
-    });
+    }
     await ctx.answerCbQuery();
 });
 
 bot.action("close_menu", async (ctx) => {
     const chatId = ctx.chat.id;
-    await ctx.editMessageText("Меню закрыто", {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: "Запуск✅", callback_data: "start_bot" }]
-            ]
+    try {
+        await ctx.editMessageText("Меню закрыто", {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "Запуск✅", callback_data: "start_bot" }]
+                ]
+            }
+        });
+    } catch (error) {
+        if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
+            // Сообщение уже такое же, это нормально
+        } else {
+            await ctx.reply("Меню закрыто", {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "Запуск✅", callback_data: "start_bot" }]
+                    ]
+                }
+            });
         }
-    });
+    }
     await ctx.answerCbQuery();
 });
 
@@ -293,21 +367,35 @@ bot.on("message", async ctx => {
         console.log('🔍 Получен поисковый запрос:', searchQuery, 'от пользователя', chatId);
         if (searchQuery) {
             try {
-                // Удаляем reply keyboard после ввода запроса
-                await ctx.reply("", {
-                    reply_markup: {
-                        remove_keyboard: true
-                    }
-                });
+                // Удаляем reply keyboard после ввода запроса (если есть)
+                try {
+                    await ctx.telegram.sendMessage(chatId, "🔍 Ищу рецепты...", {
+                        reply_markup: {
+                            remove_keyboard: true
+                        }
+                    }).catch(() => {
+                        // Игнорируем ошибку отправки
+                    });
+                } catch (kbError) {
+                    // Игнорируем ошибку, если клавиатуры нет
+                    console.log('Клавиатура уже удалена или не была установлена');
+                }
 
                 // Сохраняем поисковый запрос для повторного использования
                 userSearchQueries.set(chatId, searchQuery);
 
                 const searchResult = await search(ctx, userHrefs, searchQuery);
-                console.log('🔍 Результат поиска:', searchResult.substring(0, 100));
-                await ctx.reply(searchResult, getDetailedMenuKeyboard());
+
+                if (searchResult && typeof searchResult === 'string') {
+                    console.log('🔍 Результат поиска:', searchResult.substring(0, 100));
+                    await ctx.reply(searchResult, getDetailedMenuKeyboard());
+                } else {
+                    console.error('❌ Неожиданный результат поиска:', searchResult);
+                    await ctx.reply('Произошла ошибка при поиске. Попробуйте позже.');
+                }
             } catch (error) {
                 console.error('❌ Ошибка при поиске:', error);
+                console.error('❌ Stack trace:', error.stack);
                 await ctx.reply('Произошла ошибка при поиске. Попробуйте позже.');
             }
         }

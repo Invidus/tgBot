@@ -33,18 +33,57 @@ export const search = async (ctx, userHrefs, searchStr, retryCount = 0) => {
       timeout: 10000
     });
 
+    console.log('🔍 HTTP статус:', axiosResponse.status);
+    console.log('🔍 Размер ответа:', axiosResponse.data?.length || 0, 'символов');
+
+    if (!axiosResponse.data) {
+      console.error('❌ Ответ от сервера пустой');
+      return 'Произошла ошибка при получении данных. Попробуйте позже.';
+    }
+
     const $ = cheerio.load(axiosResponse.data);
     var row = "";
-    const countCard = $(".cooking-block > .cn-item:not(.ads_enabled)").length;
+
+    // Пробуем разные селекторы для поиска результатов
+    let countCard = $(".cooking-block > .cn-item:not(.ads_enabled)").length;
+    console.log('🔍 Найдено карточек (селектор 1):', countCard);
 
     if (countCard === 0) {
+      // Пробуем альтернативный селектор
+      countCard = $("section#cooking > .cooking-block > .cn-item:not(.ads_enabled)").length;
+      console.log('🔍 Найдено карточек (селектор 2):', countCard);
+    }
+
+    if (countCard === 0) {
+      // Пробуем еще один вариант
+      countCard = $(".cn-item:not(.ads_enabled)").length;
+      console.log('🔍 Найдено карточек (селектор 3):', countCard);
+    }
+
+    if (countCard === 0) {
+      const htmlPreview = typeof axiosResponse.data === 'string'
+        ? axiosResponse.data.substring(0, 1000)
+        : 'HTML не является строкой';
+      console.log('🔍 Карточки не найдены. HTML превью (первые 1000 символов):', htmlPreview);
       return `По запросу "${searchStr}" ничего не найдено. Попробуйте другой запрос.`;
     }
 
     const randomCard = getRandomInt(0, countCard);
     let foundData = null;
+    let selector = ".cooking-block > .cn-item:not(.ads_enabled)";
 
-    $(".cooking-block > .cn-item:not(.ads_enabled)").each((index, element) => {
+    // Используем тот селектор, который нашел элементы
+    if ($(selector).length === 0) {
+      selector = "section#cooking > .cooking-block > .cn-item:not(.ads_enabled)";
+    }
+    if ($(selector).length === 0) {
+      selector = ".cn-item:not(.ads_enabled)";
+    }
+
+    console.log('🔍 Используемый селектор:', selector);
+    console.log('🔍 Случайная карточка:', randomCard, 'из', countCard);
+
+    $(selector).each((index, element) => {
       const dataObj = {
         img: $(element).find("img").attr("src"),
         ccal: $(element).find(".info-preview  .level-left > span").text(),
@@ -56,6 +95,11 @@ export const search = async (ctx, userHrefs, searchStr, retryCount = 0) => {
 
       if (index === randomCard) {
         foundData = dataObj;
+        console.log('🔍 Найденные данные:', {
+          header: dataObj.productHeader,
+          href: dataObj.hrefOnProduct,
+          hasDescription: !!dataObj.productDiscription
+        });
       }
     });
 
@@ -84,7 +128,12 @@ export const search = async (ctx, userHrefs, searchStr, retryCount = 0) => {
 
     return row;
   } catch(error) {
-    console.error('Ошибка при поиске:', error);
+    console.error('❌ Ошибка при поиске:', error);
+    console.error('❌ Stack trace:', error.stack);
+    if (error.response) {
+      console.error('❌ HTTP статус:', error.response.status);
+      console.error('❌ HTTP данные:', error.response.data?.substring(0, 500));
+    }
     return 'Произошла ошибка при поиске рецепта. Попробуйте позже.';
   }
 }

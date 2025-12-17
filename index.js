@@ -1,10 +1,11 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
 import { showMenu } from "./menu.js";
-import { detailedMenu, detailedCloseMenu, fullRecepie, getDetailedMenuKeyboard } from "./innerButtons.js";
+import { detailedMenu, detailedCloseMenu, fullRecepie, getDetailedMenuKeyboard, getSearchKeyboard } from "./innerButtons.js";
 import { getBreakFast, getFullRecepie } from "./breakfast.js";
 import { getDinner, getFullRecepieDinner } from "./dinner.js";
 import { getLunch, getFullRecepieLunch } from "./lunch.js";
+import { search, getFullRecepieSearch } from "./search.js";
 import { Pagination } from "telegraf-pagination";
 import { Markup } from "telegraf";
 
@@ -14,6 +15,9 @@ const userLastActivity = new Map(); // Отслеживание последне
 
 // Хранилище ссылок на рецепты для каждого пользователя: chatId -> { breakfast: url, lunch: url, dinner: url }
 const userHrefs = new Map();
+
+// Хранилище последних поисковых запросов: chatId -> searchQuery
+const userSearchQueries = new Map();
 
 const bot = new Telegraf(config.telegramToken, {});
 
@@ -36,6 +40,7 @@ const resetUserState = (chatId) => {
 // Вспомогательные функции для работы с hrefOnProduct
 const resetUserHrefs = (chatId) => {
     userHrefs.delete(chatId);
+    userSearchQueries.delete(chatId);
 };
 // Функция очистки старых данных
 const cleanupOldUsers = () => {
@@ -44,6 +49,7 @@ const cleanupOldUsers = () => {
       if (now - lastActivity > USER_DATA_TTL) {
         userStates.delete(chatId);
         userHrefs.delete(chatId);
+        userSearchQueries.delete(chatId);
         userLastActivity.delete(chatId);
       }
     }
@@ -74,6 +80,7 @@ const updateUserActivity = (chatId) => {
                 [{ text: "Завтрак🍏", callback_data: "breakfast" }],
                 [{ text: "Обед🍜", callback_data: "dinner" }],
                 [{ text: "Ужин🍝", callback_data: "lunch" }],
+                [{ text: "Поиск🔎", callback_data: "search" }],
                 [{ text: "Закрыть❌", callback_data: "close_menu" }]
             ]
         }
@@ -111,6 +118,7 @@ bot.command("removekeyboard", async (ctx) => {
 
  // Обработка inline-кнопок
 bot.action("breakfast", async (ctx) => {
+    await ctx.answerCbQuery("Загрузка...", true);
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
     let breakfast = await getBreakFast(ctx, userHrefs);
@@ -120,6 +128,7 @@ bot.action("breakfast", async (ctx) => {
 });
 
 bot.action("dinner", async (ctx) => {
+    await ctx.answerCbQuery("Загрузка...", true);
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
     setUserState(chatId, 2);
@@ -129,12 +138,21 @@ bot.action("dinner", async (ctx) => {
 });
 
 bot.action("lunch", async (ctx) => {
+    await ctx.answerCbQuery("Загрузка...", true);
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
     setUserState(chatId, 3);
     let lunch = await getLunch(ctx, userHrefs);
     await ctx.editMessageText(lunch, getDetailedMenuKeyboard());
     await ctx.answerCbQuery();
+});
+
+bot.action("search", async (ctx) => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat.id;
+    updateUserActivity(chatId);
+    setUserState(chatId, 4);
+    await ctx.editMessageText("Напишите что хотите найти: например ПП ужин, спаггети с креветками и т.п.", getSearchKeyboard());
 });
 
 bot.action("another_dish", async (ctx) => {
@@ -153,6 +171,24 @@ bot.action("another_dish", async (ctx) => {
             break;
         case 3:
             messageText = await getLunch(ctx, userHrefs);
+            break;
+        case 4:
+            // Повторяем последний поисковый запрос
+            const lastSearchQuery = userSearchQueries.get(chatId);
+            if (lastSearchQuery) {
+                try {
+                    messageText = await search(ctx, userHrefs, lastSearchQuery);
+                } catch (error) {
+                    console.error('Ошибка при повторном поиске:', error);
+                    await ctx.answerCbQuery("Ошибка при поиске");
+                    return;
+                }
+            } else {
+                // Если запроса нет, просим ввести новый
+                await ctx.answerCbQuery("Введите новый поисковый запрос");
+                await ctx.editMessageText("Напишите что хотите найти: например ПП ужин, спаггети с креветками и т.п.", getSearchKeyboard());
+                return;
+            }
             break;
         default:
             await ctx.answerCbQuery("Сначала выберите тип блюда");
@@ -178,6 +214,9 @@ bot.action("ingredients", async (ctx) => {
         case 3:
             await getFullRecepieLunch(ctx, userHrefs);
             break;
+        case 4:
+            await getFullRecepieSearch(ctx, userHrefs);
+            break;
         default:
             await ctx.reply("Сначала выберите завтрак, обед или ужин.");
             break;
@@ -196,6 +235,7 @@ bot.action("back_to_main", async (ctx) => {
                 [{ text: "Завтрак🍏", callback_data: "breakfast" }],
                 [{ text: "Обед🍜", callback_data: "dinner" }],
                 [{ text: "Ужин🍝", callback_data: "lunch" }],
+                [{ text: "Поиск🔎", callback_data: "search" }],
                 [{ text: "Закрыть❌", callback_data: "close_menu" }]
             ]
         }
@@ -234,6 +274,7 @@ bot.action("start_bot", async (ctx) => {
                 [{ text: "Завтрак🍏", callback_data: "breakfast" }],
                 [{ text: "Обед🍜", callback_data: "dinner" }],
                 [{ text: "Ужин🍝", callback_data: "lunch" }],
+                [{ text: "Поиск🔎", callback_data: "search" }],
                 [{ text: "Закрыть❌", callback_data: "close_menu" }]
             ]
         }
@@ -244,11 +285,30 @@ bot.action("start_bot", async (ctx) => {
 bot.on("message", async ctx => {
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
+    const state = getUserState(chatId);
+
+    // Обработка поискового запроса (state = 4)
+    if (state === 4 && ctx.message.text && !ctx.message.text.startsWith('/')) {
+        const searchQuery = ctx.message.text.trim();
+        console.log('🔍 Получен поисковый запрос:', searchQuery, 'от пользователя', chatId);
+        if (searchQuery) {
+            try {
+                // Сохраняем поисковый запрос для повторного использования
+                userSearchQueries.set(chatId, searchQuery);
+
+                const searchResult = await search(ctx, userHrefs, searchQuery);
+                console.log('🔍 Результат поиска:', searchResult.substring(0, 100));
+                await ctx.reply(searchResult, getDetailedMenuKeyboard());
+            } catch (error) {
+                console.error('❌ Ошибка при поиске:', error);
+                await ctx.reply('Произошла ошибка при поиске. Попробуйте позже.');
+            }
+        }
+        return;
+    }
 
     // Обрабатывать только текстовые сообщения, не связанные с кнопками
     // Кнопки теперь обрабатываются через bot.action()
-
-    // Если нужно обрабатывать команды или другие текстовые сообщения, добавьте их здесь
 });
 bot.launch()
   .then(() => {

@@ -56,10 +56,10 @@ export const getDinner = async (ctx, userHrefs, retryCount = 0) => {
     row = foundData.productHeader  + "\nОписание: " + foundData.productDiscription + "\n\nВремя приготовления блюда: "
     + foundData.timeToCook + "\nКалорийность блюда на 100 г: " + foundData.ccal + "\nСсылка на рецепт: " + foundData.hrefOnProduct;
 
-    const chatId = ctx.chat.id;
-    if (!userHrefs.has(chatId)) {
-      userHrefs.set(chatId, {});
-    }
+        const chatId = ctx.chat.id;
+        if (!userHrefs.has(chatId)) {
+          userHrefs.set(chatId, {});
+        }
     userHrefs.get(chatId).dinner = foundData.hrefOnProduct;
     const scrapedData = {
       dataArr: dataArr

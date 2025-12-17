@@ -51,3 +51,9 @@ export const detailedCloseMenu = (bot, chatId) => {
     }
   });
 }
+
+export const getSearchKeyboard = () => {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("Вернуться на главную↩️", "back_to_main")]
+  ]);
+};

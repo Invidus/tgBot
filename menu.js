@@ -8,6 +8,7 @@ export const showMenu = (bot, chatId) => {
         [{ text: "Завтрак🍏", callback_data: "breakfast" }],
         [{ text: "Обед🍜", callback_data: "dinner" }],
         [{ text: "Ужин🍝", callback_data: "lunch" }],
+        [{ text: "Поиск🔎", callback_data: "search" }],
         [{ text: "Закрыть❌", callback_data: "close_menu" }]
       ]
     }

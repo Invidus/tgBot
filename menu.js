@@ -1,5 +1,3 @@
-import { Markup } from "telegraf";
-
 export const showMenu = (bot, chatId) => {
   bot.telegram.sendMessage(chatId, "Выберите действие", {
     reply_markup: {

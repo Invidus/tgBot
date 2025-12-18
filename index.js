@@ -1,13 +1,10 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
-import { showMenu } from "./menu.js";
-import { detailedMenu, detailedCloseMenu, fullRecepie, getDetailedMenuKeyboard, getSearchKeyboard } from "./innerButtons.js";
+import { getDetailedMenuKeyboard, getSearchKeyboard } from "./innerButtons.js";
 import { getBreakFast, getFullRecepie } from "./breakfast.js";
 import { getDinner, getFullRecepieDinner } from "./dinner.js";
 import { getLunch, getFullRecepieLunch } from "./lunch.js";
 import { search, getFullRecepieSearch } from "./search.js";
-import { Pagination } from "telegraf-pagination";
-import { Markup } from "telegraf";
 
 // TTL(time to live) очистка старых записей
 const USER_DATA_TTL = 24 * 60 * 60 * 1000;
@@ -86,27 +83,6 @@ const updateUserActivity = (chatId) => {
         }
     });
 });
-
-bot.command("playlist", async (ctx) => {
-    const data = await getFullRecepie(ctx, userHrefs); // Replace this with your data retrieval logic
-    const pagination = new Pagination({
-       data: data,
-       header: (currentPage, pageSize, total) => `Nəsimi BR: 250* 299k\nPage ${currentPage} of ${total}`,
-       format: (item, index) => `${index + 1}. ${item.full_name} - ${item.company}`,
-       pageSize: 5,
-       rowSize: 5,
-       onSelect: (item, index) => {
-          // You can perform actions when an item is selected here
-          ctx.reply(`You selected ${item.quantity} - ${item.price_usd}`);
-       },
-    });
-
-    pagination.handleActions(bot);
-    let text = await pagination.text();
-    let keyboard = await pagination.keyboard();
-    ctx.reply(text, keyboard);
- });
-
 // Команда для удаления reply keyboard
 bot.command("removekeyboard", async (ctx) => {
     await ctx.reply("Клавиатура удалена", {
@@ -132,7 +108,6 @@ bot.action("breakfast", async (ctx) => {
         }
     }
     setUserState(chatId, 1);
-    await ctx.answerCbQuery();
 });
 
 bot.action("dinner", async (ctx) => {
@@ -150,7 +125,6 @@ bot.action("dinner", async (ctx) => {
             await ctx.reply(dinner, getDetailedMenuKeyboard());
         }
     }
-    await ctx.answerCbQuery();
 });
 
 bot.action("lunch", async (ctx) => {
@@ -168,7 +142,6 @@ bot.action("lunch", async (ctx) => {
             await ctx.reply(lunch, getDetailedMenuKeyboard());
         }
     }
-    await ctx.answerCbQuery();
 });
 
 bot.action("search", async (ctx) => {
@@ -218,8 +191,15 @@ bot.action("another_dish", async (ctx) => {
             } else {
                 // Если запроса нет, просим ввести новый
                 await ctx.answerCbQuery("Введите новый поисковый запрос");
-                await ctx.editMessageText("Напишите что хотите найти: например ПП ужин, спаггети с креветками и т.п.", getSearchKeyboard());
-                return;
+                try {
+                    await ctx.editMessageText("Напишите что хотите найти: например ПП ужин, спаггети с креветками и т.п.", getSearchKeyboard());
+                } catch (error) {
+                    if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
+                        // Сообщение уже такое же, это нормально
+                    } else {
+                        await ctx.reply("Напишите что хотите найти: например ПП ужин, спаггети с креветками и т.п.", getSearchKeyboard());
+                    }
+                }                return;
             }
             break;
         default:
@@ -387,7 +367,7 @@ bot.on("message", async ctx => {
                 const searchResult = await search(ctx, userHrefs, searchQuery);
 
                 if (searchResult && typeof searchResult === 'string') {
-                    console.log('🔍 Результат поиска:', searchResult.substring(0, 100));
+                    console.log('🔍 Результат поиска:', searchResult.length > 100 ? searchResult.substring(0, 100) + '...' : searchResult);
                     await ctx.reply(searchResult, getDetailedMenuKeyboard());
                 } else {
                     console.error('❌ Неожиданный результат поиска:', searchResult);

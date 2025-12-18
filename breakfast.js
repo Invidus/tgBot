@@ -1,10 +1,9 @@
 import { config } from "./config.js";
 import axios from "axios";
 import cheerio from "cheerio";
-import { detailedMenu, detailedCloseMenu, fullRecepie, getDetailedMenuKeyboard } from "./innerButtons.js";
-import { Pagination } from  "telegraf-pagination";
+import { getDetailedMenuKeyboard } from "./innerButtons.js";
 
-const dataArr = [];
+
 function getRandomInt(min, max) {
   min = Math.ceil(min);
   max = Math.floor(max);
@@ -12,6 +11,7 @@ function getRandomInt(min, max) {
 }
 
 export const getBreakFast = async (ctx, userHrefs, retryCount = 0) => {
+  const dataArr = [];
   const MAX_RETRIES = 5; // Максимум 5 попыток, защита от переполнения стека
   try {
     const axiosResponse = await axios.request({
@@ -20,13 +20,14 @@ export const getBreakFast = async (ctx, userHrefs, retryCount = 0) => {
       headers: {
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
-      }
+      },
+      timeout: 10000
     })
 
     const $ = cheerio.load(axiosResponse.data);
-    var row = "";
+    let row = "";
     const countCard = $("section#cooking > .cooking-block > .cn-item:not(.ads_enabled)").length;
-    const randomCard = getRandomInt(1, countCard);
+    const randomCard = getRandomInt(0, countCard);
     let foundData = null;
 
     $("section#cooking > .cooking-block > .cn-item:not(.ads_enabled)").each((index, element) => {
@@ -63,17 +64,13 @@ export const getBreakFast = async (ctx, userHrefs, retryCount = 0) => {
       userHrefs.set(chatId, {});
     }
     userHrefs.get(chatId).breakfast = foundData.hrefOnProduct;
-    const scrapedData = {
-      dataArr: dataArr
-    }
 
-    // const scrapedDataJSON = JSON.stringify(scrapedData);
     if (dataArr.length > 0) {
-      dataArr.splice(0, dataArr.length)
+      dataArr.splice(0, dataArr.length);
     }
     return row;
   } catch(error) {
-    console.log(error);
+    console.error('Ошибка при получении рецепта:', error);
     return 'Произошла ошибка при получении рецепта. Попробуйте позже.';
   }
 }
@@ -92,66 +89,21 @@ export const getFullRecepie = async (ctx, userHrefs) => {
       url: hrefOnProduct,
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
-      }
+      },
+      timeout: 10000
     })
     const $ = cheerio.load(axiosResponse.data);
 
-    var portion = $('#yield_num_input').attr('value') || 'не указано';
+    const portion = $('#yield_num_input').attr('value') || 'не указано';
     console.log(portion);
-    var recepieList = [];
-    var stebByStepRecepie = [];
-    var imgArray = [];
+    const recepieList = [];
     $('#recept-list > div.ingredient meta').each((index, element) => {
       recepieList.push($(element).attr("content"));
-      // const dataObjRecepie = {
-      //   ingredient: element
-      //    ingredientName: $(element).find("a.name").text(),
-      //    discriptionName: $(element).find("span.ingredient-info").text(),
-      //    piece: $(element).find("span.ingredient-info").text(),
-
-      // }
-
     });
     ctx.reply(`Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n`, getDetailedMenuKeyboard())
   } catch(error) {
-    console.log(error);
+    console.error('Ошибка при получении рецепта:', error);
     ctx.reply("Произошла ошибка при получении рецепта. Попробуйте выбрать другое блюдо.");
   }
-
-
-
-
-// todo рецепт с картинками
-  //   let pagination = new Pagination({ stebByStepRecepie });
-  //   let text = await pagination.text();
-  //   let keyboard = await pagination.keyboard();
-  //   if (stebByStepRecepie.length === 0 && imgArray.length === 0) {
-  //     var message = $('div.instructions > p').text();
-  //     ctx.reply(`${message}`);
-  //     //detailedMenu(bot, ctx.chat.id);
-  //   } else {
-  //     nextStep(imgArray, stebByStepRecepie, ctx);
-  //     pagination.handleActions(bot);
-  //   }
-
-
-
-  // return 1;
-
-  // const countCard = $("section#cooking > .cooking-block > .cn-item:not(.ads_enabled)").length;
 }
-
-// todo рецепт с картинками
-// const stepCounter = 0;
-// export const nextStep = function (imgArray, stebByStepRecepie, ctx) {
-//   for (var i = 0; i < stebByStepRecepie.length; i++) {
-//     ctx.replyWithPhoto({
-//       url: imgArray[i] ? imgArray[i] : ''
-//      },
-//     {
-//       caption: stebByStepRecepie[i]
-//     });
-
-//   }
-// }
 

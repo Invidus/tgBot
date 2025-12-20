@@ -92,11 +92,19 @@ export const search = async (ctx, userHrefs, searchStr, retryCount = 0) => {
   }
 }
 
-export const getFullRecepieSearch = async (ctx, userHrefs) => {
+export const getFullRecepieSearch = async (ctx, userHrefs, loadingMessage = null) => {
   const chatId = ctx.chat.id;
   const hrefOnProduct = userHrefs.get(chatId)?.search;
 
   if (!hrefOnProduct) {
+    // Удаляем сообщение о загрузке, если оно было отправлено
+    if (loadingMessage) {
+      try {
+        await ctx.telegram.deleteMessage(chatId, loadingMessage.message_id);
+      } catch (e) {
+        // Игнорируем ошибки удаления
+      }
+    }
     ctx.reply("Сначала выберите блюдо из результатов поиска.");
     return;
   }
@@ -104,6 +112,20 @@ export const getFullRecepieSearch = async (ctx, userHrefs) => {
   // Проверяем кэш
   const cached = getCachedRecipe(hrefOnProduct);
   if (cached) {
+    // Редактируем сообщение о загрузке или отправляем новое
+    if (loadingMessage) {
+      try {
+        await ctx.telegram.editMessageText(chatId, loadingMessage.message_id, null, cached, getDetailedMenuKeyboard(true));
+        return;
+      } catch (e) {
+        // Если не удалось отредактировать, удаляем и отправляем новое
+        try {
+          await ctx.telegram.deleteMessage(chatId, loadingMessage.message_id);
+        } catch (e2) {
+          // Игнорируем ошибки удаления
+        }
+      }
+    }
     ctx.reply(cached, getDetailedMenuKeyboard(true));
     return;
   }
@@ -242,6 +264,20 @@ export const getFullRecepieSearch = async (ctx, userHrefs) => {
     // Кэшируем результат
     cacheRecipe(hrefOnProduct, message);
 
+    // Редактируем сообщение о загрузке или отправляем новое
+    if (loadingMessage) {
+      try {
+        await ctx.telegram.editMessageText(chatId, loadingMessage.message_id, null, message, getDetailedMenuKeyboard(true));
+        return;
+      } catch (e) {
+        // Если не удалось отредактировать, удаляем и отправляем новое
+        try {
+          await ctx.telegram.deleteMessage(chatId, loadingMessage.message_id);
+        } catch (e2) {
+          // Игнорируем ошибки удаления
+        }
+      }
+    }
     // Используем клавиатуру без кнопки "Что нужно для приготовления", так как рецепт уже показан
     ctx.reply(message, getDetailedMenuKeyboard(true));
   } catch(error) {
@@ -274,9 +310,32 @@ export const getFullRecepieSearch = async (ctx, userHrefs) => {
         recepieList.push($(element).attr("content"));
       });
       const message = `Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n━━━━━━━━━━━━━━━━━━━━\nБелки: не указано Жиры: не указано Углеводы: не указано\nКалорийность на 100г: не указано\n`;
+
+      // Редактируем сообщение о загрузке или отправляем новое
+      if (loadingMessage) {
+        try {
+          await ctx.telegram.editMessageText(chatId, loadingMessage.message_id, null, message, getDetailedMenuKeyboard(true));
+          return;
+        } catch (e) {
+          // Если не удалось отредактировать, удаляем и отправляем новое
+          try {
+            await ctx.telegram.deleteMessage(chatId, loadingMessage.message_id);
+          } catch (e2) {
+            // Игнорируем ошибки удаления
+          }
+        }
+      }
       ctx.reply(message, getDetailedMenuKeyboard(true));
     } catch (fallbackError) {
       console.error('❌ Ошибка fallback:', fallbackError);
+      // Удаляем сообщение о загрузке при ошибке
+      if (loadingMessage) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, loadingMessage.message_id);
+        } catch (e) {
+          // Игнорируем ошибки удаления
+        }
+      }
       ctx.reply("Произошла ошибка при получении рецепта. Попробуйте выбрать другое блюдо.");
     }
   }

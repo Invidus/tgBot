@@ -300,30 +300,54 @@ bot.action("ingredients", async (ctx) => {
         console.log('Callback query уже истек, продолжаем...');
     }
 
+    // Отправляем уведомление о загрузке
+    let loadingMessage = null;
+    try {
+        loadingMessage = await ctx.reply("⏳ Загрузка рецепта...");
+    } catch (e) {
+        console.error('Ошибка отправки уведомления о загрузке:', e);
+    }
+
     try {
         switch (state) {
             case 1:
-                await getFullRecepie(ctx, userHrefs);
+                await getFullRecepie(ctx, userHrefs, loadingMessage);
                 setRecipeRequested(chatId, 'breakfast');
                 break;
             case 2:
-                await getFullRecepieDinner(ctx, userHrefs);
+                await getFullRecepieDinner(ctx, userHrefs, loadingMessage);
                 setRecipeRequested(chatId, 'dinner');
                 break;
             case 3:
-                await getFullRecepieLunch(ctx, userHrefs);
+                await getFullRecepieLunch(ctx, userHrefs, loadingMessage);
                 setRecipeRequested(chatId, 'lunch');
                 break;
             case 4:
-                await getFullRecepieSearch(ctx, userHrefs);
+                await getFullRecepieSearch(ctx, userHrefs, loadingMessage);
                 setRecipeRequested(chatId, 'search');
                 break;
             default:
+                // Удаляем сообщение о загрузке, если оно было отправлено
+                if (loadingMessage) {
+                    try {
+                        await ctx.telegram.deleteMessage(chatId, loadingMessage.message_id);
+                    } catch (e) {
+                        // Игнорируем ошибки удаления
+                    }
+                }
                 await ctx.reply("Сначала выберите завтрак, обед или ужин.");
                 break;
         }
     } catch (error) {
         console.error('Ошибка при получении рецепта:', error);
+        // Удаляем сообщение о загрузке при ошибке
+        if (loadingMessage) {
+            try {
+                await ctx.telegram.deleteMessage(chatId, loadingMessage.message_id);
+            } catch (e) {
+                // Игнорируем ошибки удаления
+            }
+        }
         try {
             await ctx.reply("Произошла ошибка при получении рецепта. Попробуйте еще раз.");
         } catch (e) {

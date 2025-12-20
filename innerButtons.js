@@ -1,12 +1,21 @@
 import { Markup } from "telegraf";
 
-export const getDetailedMenuKeyboard = () => {
-  return Markup.inlineKeyboard([
+export const getDetailedMenuKeyboard = (recipeRequested = false) => {
+  const buttons = [
     [Markup.button.callback("Другое блюдо🔁", "another_dish")],
-    [Markup.button.callback("Что нужно для приготовления🔎", "ingredients")],
+  ];
+
+  // Если рецепт еще не был запрошен, показываем кнопку
+  if (!recipeRequested) {
+    buttons.push([Markup.button.callback("Что нужно для приготовления🔎", "ingredients")]);
+  }
+
+  buttons.push(
     [Markup.button.callback("Вернуться на главную↩️", "back_to_main")],
     [Markup.button.callback("Закрыть❌", "close_menu")]
-  ]);
+  );
+
+  return Markup.inlineKeyboard(buttons);
 };
 
 export const detailedMenu = (bot, chatId) => {

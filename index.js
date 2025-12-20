@@ -477,17 +477,25 @@ bot.on("message", async ctx => {
     // Обрабатывать только текстовые сообщения, не связанные с кнопками
     // Кнопки теперь обрабатываются через bot.action()
 });
-// Инициализируем браузер при старте бота
+// Инициализируем браузер при старте бота (не критично, если не получится)
 initBrowser()
   .then(() => {
-    return bot.launch();
-  })
-  .then(() => {
-    console.log('✅ Бот успешно запущен!');
+    console.log('✅ Браузер Playwright готов');
   })
   .catch((err) => {
-    console.error('❌ Ошибка при запуске бота:', err);
-    process.exit(1);
+    console.warn('⚠️ Браузер Playwright не удалось инициализировать:', err.message);
+    console.warn('⚠️ Бот будет работать в режиме fallback (без питательных веществ)');
+  })
+  .finally(() => {
+    // Запускаем бота в любом случае
+    bot.launch()
+      .then(() => {
+        console.log('✅ Бот успешно запущен!');
+      })
+      .catch((err) => {
+        console.error('❌ Ошибка при запуске бота:', err);
+        process.exit(1);
+      });
   });
 
 // Graceful shutdown

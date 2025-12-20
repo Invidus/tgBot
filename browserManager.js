@@ -3,9 +3,8 @@ import { chromium } from "playwright";
 let browser = null;
 let isInitializing = false;
 let activePages = 0;
+let playwrightAvailable = true; // Флаг доступности Playwright
 const MAX_CONCURRENT_PAGES = 2; // Уменьшено для снижения нагрузки при множестве пользователей
-const requestQueue = []; // Очередь запросов
-let processingQueue = false;
 
 /**
  * Проверяет, жив ли браузер
@@ -60,8 +59,11 @@ export const initBrowser = async () => {
       ]
     });
     console.log('✅ Браузер Playwright инициализирован');
+    playwrightAvailable = true;
   } catch (error) {
     console.error('❌ Ошибка инициализации браузера:', error);
+    console.error('⚠️ Playwright недоступен, будет использоваться fallback на axios');
+    playwrightAvailable = false;
     isInitializing = false;
     throw error;
   }
@@ -70,89 +72,83 @@ export const initBrowser = async () => {
 };
 
 /**
- * Получает новую страницу из переиспользуемого браузера (с очередью)
+ * Проверяет, доступен ли Playwright
  */
-export const getPage = async () => {
-  return new Promise((resolve, reject) => {
-    // Добавляем запрос в очередь
-    requestQueue.push({ resolve, reject, timestamp: Date.now() });
-
-    // Запускаем обработку очереди если еще не запущена
-    if (!processingQueue) {
-      processQueue();
-    }
-  });
+export const isPlaywrightAvailable = () => {
+  return playwrightAvailable;
 };
 
 /**
- * Обрабатывает очередь запросов
+ * Получает новую страницу из переиспользуемого браузера
  */
-const processQueue = async () => {
-  if (processingQueue) return;
-  processingQueue = true;
+export const getPage = async () => {
+  // Если Playwright недоступен, выбрасываем ошибку для fallback
+  if (!playwrightAvailable) {
+    throw new Error('PLAYWRIGHT_UNAVAILABLE');
+  }
 
-  while (requestQueue.length > 0) {
-    // Проверяем, есть ли место для новой страницы
-    if (activePages >= MAX_CONCURRENT_PAGES) {
-      // Ждем освобождения места
-      await new Promise(resolve => setTimeout(resolve, 500));
-      continue;
-    }
+  console.log(`📄 Запрос страницы. Активных страниц: ${activePages}/${MAX_CONCURRENT_PAGES}`);
 
-    // Удаляем старые запросы (старше 30 секунд)
-    const now = Date.now();
-    while (requestQueue.length > 0 && now - requestQueue[0].timestamp > 30000) {
-      const oldRequest = requestQueue.shift();
-      oldRequest.reject(new Error('Время ожидания истекло. Попробуйте позже.'));
-    }
+  // Простая проверка лимита без сложной очереди
+  let waitCount = 0;
+  while (activePages >= MAX_CONCURRENT_PAGES && waitCount < 60) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    waitCount++;
+  }
 
-    if (requestQueue.length === 0) break;
+  if (activePages >= MAX_CONCURRENT_PAGES) {
+    console.error('❌ Превышен лимит одновременных страниц');
+    throw new Error('Превышено максимальное количество одновременных запросов. Попробуйте позже.');
+  }
 
-    const request = requestQueue.shift();
-
+  // Проверяем и инициализируем браузер если нужно
+  if (!browser || !isBrowserAlive()) {
+    console.log('🌐 Инициализация браузера...');
     try {
-      // Проверяем и инициализируем браузер если нужно
-      if (!browser || !isBrowserAlive()) {
-        await initBrowser();
-      }
-
-      activePages++;
-      const page = await browser.newPage();
-
-      // Устанавливаем таймауты для страницы (уменьшены для снижения нагрузки)
-      page.setDefaultTimeout(15000); // 15 секунд
-      page.setDefaultNavigationTimeout(15000);
-
-      // Блокируем загрузку ненужных ресурсов для ускорения
-      await page.route('**/*', (route) => {
-        const resourceType = route.request().resourceType();
-        // Блокируем изображения, шрифты, медиа - оставляем только документы, скрипты, стили
-        if (['image', 'font', 'media', 'stylesheet'].includes(resourceType)) {
-          route.abort();
-        } else {
-          route.continue();
-        }
-      });
-
-      // Устанавливаем User-Agent
-      await page.setExtraHTTPHeaders({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
-      });
-
-      request.resolve(page);
+      await initBrowser();
     } catch (error) {
-      activePages--;
-      // Если браузер упал, пытаемся пересоздать
-      if (error.message.includes('Target closed') || error.message.includes('Browser closed')) {
-        browser = null;
-        request.reject(new Error('Браузер был закрыт. Попробуйте еще раз.'));
-      } else {
-        request.reject(error);
-      }
+      playwrightAvailable = false;
+      console.error('❌ Не удалось инициализировать браузер, используем fallback');
+      throw new Error('PLAYWRIGHT_UNAVAILABLE');
     }
   }
 
-  processingQueue = false;
+  try {
+    activePages++;
+    console.log(`✅ Создание новой страницы. Активных: ${activePages}`);
+    const page = await browser.newPage();
+
+    // Устанавливаем таймауты для страницы (уменьшены для снижения нагрузки)
+    page.setDefaultTimeout(15000); // 15 секунд
+    page.setDefaultNavigationTimeout(15000);
+
+    // Блокируем загрузку ненужных ресурсов для ускорения
+    await page.route('**/*', (route) => {
+      const resourceType = route.request().resourceType();
+      // Блокируем изображения, шрифты, медиа - оставляем только документы, скрипты, стили
+      if (['image', 'font', 'media', 'stylesheet'].includes(resourceType)) {
+        route.abort();
+      } else {
+        route.continue();
+      }
+    });
+
+    // Устанавливаем User-Agent
+    await page.setExtraHTTPHeaders({
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+    });
+
+    return page;
+  } catch (error) {
+    activePages--;
+    console.error('❌ Ошибка при создании страницы:', error);
+    // Если браузер упал, пытаемся пересоздать
+    if (error.message && (error.message.includes('Target closed') || error.message.includes('Browser closed'))) {
+      browser = null;
+      throw new Error('Браузер был закрыт. Попробуйте еще раз.');
+    }
+    throw error;
+  }
 };
 
 /**

@@ -96,7 +96,17 @@ export const getFullRecepieLunch = async (ctx, userHrefs) => {
   let page = null;
   try {
     // Используем переиспользуемый браузер для загрузки страницы
-    page = await getPage();
+    console.log('🔍 Запрос страницы для:', hrefOnProduct);
+    try {
+      page = await getPage();
+      console.log('✅ Страница получена');
+    } catch (playwrightError) {
+      if (playwrightError.message === 'PLAYWRIGHT_UNAVAILABLE') {
+        // Playwright недоступен, сразу используем fallback
+        throw new Error('PLAYWRIGHT_UNAVAILABLE');
+      }
+      throw playwrightError;
+    }
 
     // Переходим на страницу с быстрой стратегией ожидания
     // 'domcontentloaded' - самый быстрый вариант, ждет только загрузки DOM
@@ -226,8 +236,36 @@ export const getFullRecepieLunch = async (ctx, userHrefs) => {
       await page.close().catch(() => {}); // Игнорируем ошибки закрытия
       releasePage();
     }
-    console.error('Ошибка при получении рецепта:', error);
-    ctx.reply("Произошла ошибка при получении рецепта. Попробуйте выбрать другое блюдо.");
+
+    // Если Playwright недоступен или другая ошибка - используем fallback
+    if (error.message === 'PLAYWRIGHT_UNAVAILABLE' || error.message.includes('Browser') || error.message.includes('Target')) {
+      console.log('🔄 Playwright недоступен, используем fallback на axios...');
+    } else {
+      console.error('❌ Ошибка при получении рецепта:', error);
+    }
+
+    // Пробуем fallback на axios если Playwright не работает
+    try {
+      const axiosResponse = await axios.request({
+        method: "GET",
+        url: hrefOnProduct,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+        },
+        timeout: 10000
+      });
+      const $ = cheerio.load(axiosResponse.data);
+      const portion = $('#yield_num_input').attr('value') || 'не указано';
+      const recepieList = [];
+      $('#recept-list > div.ingredient meta').each((index, element) => {
+        recepieList.push($(element).attr("content"));
+      });
+      const message = `Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n━━━━━━━━━━━━━━━━━━━━\nБелки: не указано Жиры: не указано Углеводы: не указано\nКалорийность на 100г: не указано\n`;
+      ctx.reply(message, getDetailedMenuKeyboard(true));
+    } catch (fallbackError) {
+      console.error('❌ Ошибка fallback:', fallbackError);
+      ctx.reply("Произошла ошибка при получении рецепта. Попробуйте выбрать другое блюдо.");
+    }
   }
 }
 

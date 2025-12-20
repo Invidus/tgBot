@@ -6,6 +6,7 @@ import { getDinner, getFullRecepieDinner } from "./dinner.js";
 import { getLunch, getFullRecepieLunch } from "./lunch.js";
 import { search, getFullRecepieSearch } from "./search.js";
 import { initBrowser, closeBrowser } from "./browserManager.js";
+import { checkRateLimit } from "./rateLimiter.js";
 
 // TTL(time to live) очистка старых записей
 const USER_DATA_TTL = 24 * 60 * 60 * 1000;
@@ -270,6 +271,12 @@ bot.action("another_dish", async (ctx) => {
 bot.action("ingredients", async (ctx) => {
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
+
+    // Проверка rate limit
+    if (!checkRateLimit(chatId)) {
+        await ctx.answerCbQuery("Слишком много запросов. Подождите минуту и попробуйте снова.");
+        return;
+    }
 
     const state = getUserState(chatId);
 

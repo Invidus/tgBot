@@ -1,8 +1,9 @@
 import { config } from "./config.js";
 import axios from "axios";
 import cheerio from "cheerio";
-import { getPage } from "./browserManager.js";
+import { getPage, releasePage } from "./browserManager.js";
 import { getDetailedMenuKeyboard } from "./innerButtons.js";
+import { getCachedRecipe, cacheRecipe } from "./recipeCache.js";
 
 
 function getRandomInt(min, max) {
@@ -85,6 +86,13 @@ export const getFullRecepieLunch = async (ctx, userHrefs) => {
     return;
   }
 
+  // Проверяем кэш
+  const cached = getCachedRecipe(hrefOnProduct);
+  if (cached) {
+    ctx.reply(cached, getDetailedMenuKeyboard(true));
+    return;
+  }
+
   let page = null;
   try {
     // Используем переиспользуемый браузер для загрузки страницы
@@ -94,7 +102,7 @@ export const getFullRecepieLunch = async (ctx, userHrefs) => {
     // 'domcontentloaded' - самый быстрый вариант, ждет только загрузки DOM
     await page.goto(hrefOnProduct, {
       waitUntil: 'domcontentloaded',
-      timeout: 30000
+      timeout: 15000 // Уменьшен таймаут для снижения нагрузки
     });
 
     // Минимальная задержка для выполнения JavaScript
@@ -203,11 +211,20 @@ export const getFullRecepieLunch = async (ctx, userHrefs) => {
 
     // Закрываем страницу, но не браузер (он переиспользуется)
     await page.close();
+    releasePage();
+
+    // Формируем сообщение
+    const message = `Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n━━━━━━━━━━━━━━━━━━━━\n${proteins}${fat}${carbohydrates}\n${ccals}\n`;
+
+    // Кэшируем результат
+    cacheRecipe(hrefOnProduct, message);
+
     // Используем клавиатуру без кнопки "Что нужно для приготовления", так как рецепт уже показан
-    ctx.reply(`Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n━━━━━━━━━━━━━━━━━━━━\n${proteins}${fat}${carbohydrates}\n${ccals}\n`, getDetailedMenuKeyboard(true))
+    ctx.reply(message, getDetailedMenuKeyboard(true))
   } catch(error) {
     if (page) {
       await page.close().catch(() => {}); // Игнорируем ошибки закрытия
+      releasePage();
     }
     console.error('Ошибка при получении рецепта:', error);
     ctx.reply("Произошла ошибка при получении рецепта. Попробуйте выбрать другое блюдо.");

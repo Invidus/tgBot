@@ -1,7 +1,7 @@
 import { config } from "./config.js";
 import axios from "axios";
 import cheerio from "cheerio";
-import { getPage, releasePage } from "./browserManager.js";
+import { getPage, releasePage, isBrowserInitialized } from "./browserManager.js";
 import { getDetailedMenuKeyboard } from "./innerButtons.js";
 import { getCachedRecipe, cacheRecipe } from "./recipeCache.js";
 
@@ -95,6 +95,15 @@ export const getFullRecepieLunch = async (ctx, userHrefs) => {
 
   let page = null;
   try {
+    // Проверяем, инициализирован ли браузер, и если нет - уведомляем пользователя
+    if (!isBrowserInitialized()) {
+      try {
+        await ctx.reply("⏳ Инициализация браузера... Это займет несколько секунд.");
+      } catch (e) {
+        // Игнорируем ошибки отправки уведомления
+      }
+    }
+
     // Используем переиспользуемый браузер для загрузки страницы
     console.log('🔍 Запрос страницы для:', hrefOnProduct);
     try {

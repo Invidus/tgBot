@@ -79,6 +79,13 @@ export const isPlaywrightAvailable = () => {
 };
 
 /**
+ * Проверяет, инициализирован ли браузер
+ */
+export const isBrowserInitialized = () => {
+  return browser !== null && isBrowserAlive();
+};
+
+/**
  * Получает новую страницу из переиспользуемого браузера
  */
 export const getPage = async () => {

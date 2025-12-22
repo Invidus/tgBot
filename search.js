@@ -47,7 +47,6 @@ export const search = async (ctx, userHrefs, searchStr, retryCount = 0) => {
     });
 
     const $ = cheerio.load(axiosResponse.data);
-    let row = "";
     const countCard = $(".cooking-block > .cn-item:not(.ads_enabled)").length;
 
     if (countCard === 0) {

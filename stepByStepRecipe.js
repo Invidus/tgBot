@@ -78,23 +78,29 @@ export const getStepByStepRecipe = async (hrefOnProduct) => {
     }
 
     // Переходим на страницу с оптимизированными настройками
-    await page.goto(hrefOnProduct, {
-      waitUntil: 'domcontentloaded',
-      timeout: 8000 // Уменьшен таймаут для ускорения
-    });
+    try {
+      await page.goto(hrefOnProduct, {
+        waitUntil: 'domcontentloaded',
+        timeout: 10000 // Увеличен таймаут для надежности
+      });
+    } catch (gotoError) {
+      console.error('❌ Ошибка при переходе на страницу:', gotoError.message);
+      throw new Error(`Не удалось загрузить страницу: ${gotoError.message}`);
+    }
 
     // Ждем загрузки списка инструкций с более коротким таймаутом
     // Используем waitForFunction для более быстрой проверки наличия элементов
     try {
       await page.waitForFunction(
         () => document.querySelector('ol.instructions') !== null,
-        { timeout: 3000 }
+        { timeout: 5000 } // Увеличен таймаут
       ).catch(() => {
         // Если не дождались, продолжаем - возможно элементы уже загружены
         console.log('⚠️ Селектор ol.instructions не найден, продолжаем...');
       });
     } catch (e) {
-      // Игнорируем ошибки ожидания
+      // Игнорируем ошибки ожидания, но логируем
+      console.log('⚠️ Ошибка ожидания селектора:', e.message);
     }
 
     // Извлекаем все шаги рецепта - оптимизированная версия
@@ -103,6 +109,14 @@ export const getStepByStepRecipe = async (hrefOnProduct) => {
       const instructionsList = document.querySelector('ol.instructions');
 
       if (!instructionsList) {
+        console.log('⚠️ Список инструкций не найден на странице');
+        // Пробуем альтернативные селекторы
+        const altList = document.querySelector('ol[class*="instruction"]') ||
+                       document.querySelector('ul.instructions') ||
+                       document.querySelector('[class*="step"]');
+        if (altList) {
+          console.log('✅ Найден альтернативный селектор');
+        }
         return stepsList;
       }
 
@@ -166,7 +180,10 @@ export const getStepByStepRecipe = async (hrefOnProduct) => {
     releasePage();
 
     if (steps.length === 0) {
-      throw new Error('Шаги рецепта не найдены');
+      console.error('❌ Шаги рецепта не найдены на странице:', hrefOnProduct);
+      // Пробуем fallback на axios, даже если Playwright работал
+      console.log('🔄 Пробуем fallback на axios...');
+      throw new Error('STEPS_NOT_FOUND');
     }
 
     // Кэшируем результат
@@ -181,9 +198,13 @@ export const getStepByStepRecipe = async (hrefOnProduct) => {
       releasePage();
     }
 
-    // Если Playwright недоступен, пробуем fallback на axios
-    if (error.message === 'PLAYWRIGHT_UNAVAILABLE' || error.message.includes('Browser') || error.message.includes('Target')) {
-      console.log('🔄 Playwright недоступен для пошагового рецепта, используем fallback на axios...');
+    // Если Playwright недоступен или шаги не найдены, пробуем fallback на axios
+    if (error.message === 'PLAYWRIGHT_UNAVAILABLE' ||
+        error.message === 'STEPS_NOT_FOUND' ||
+        error.message.includes('Browser') ||
+        error.message.includes('Target') ||
+        error.message.includes('Не удалось загрузить страницу')) {
+      console.log('🔄 Playwright недоступен или шаги не найдены, используем fallback на axios...');
 
       try {
         const axiosResponse = await axios.request({
@@ -192,13 +213,28 @@ export const getStepByStepRecipe = async (hrefOnProduct) => {
           headers: {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
           },
-          timeout: 8000 // Уменьшен таймаут для ускорения
+          timeout: 10000 // Увеличен таймаут для надежности
         });
 
         const $ = cheerio.load(axiosResponse.data);
         const steps = [];
 
-        $('ol.instructions li:not(.as-ad-step)').each((index, element) => {
+        // Пробуем разные селекторы для поиска шагов
+        let listItems = $('ol.instructions li:not(.as-ad-step)');
+        if (listItems.length === 0) {
+          // Пробуем альтернативные селекторы
+          listItems = $('ol[class*="instruction"] li:not(.as-ad-step)');
+        }
+        if (listItems.length === 0) {
+          listItems = $('ul.instructions li:not(.as-ad-step)');
+        }
+        if (listItems.length === 0) {
+          listItems = $('[class*="step"] li:not(.as-ad-step)');
+        }
+
+        console.log(`🔍 Найдено элементов для обработки: ${listItems.length}`);
+
+        listItems.each((index, element) => {
           const $li = $(element);
 
           // Номер шага
@@ -229,11 +265,13 @@ export const getStepByStepRecipe = async (hrefOnProduct) => {
         });
 
         if (steps.length > 0) {
+          console.log(`✅ Получено ${steps.length} шагов через fallback`);
           // Кэшируем результат fallback
           cacheStepByStep(hrefOnProduct, steps);
           return steps;
         }
 
+        console.error('❌ Шаги не найдены в fallback режиме. HTML длина:', axiosResponse.data?.length || 0);
         throw new Error('Шаги не найдены в fallback режиме');
       } catch (fallbackError) {
         console.error('❌ Ошибка fallback для пошагового рецепта:', fallbackError);

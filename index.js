@@ -457,6 +457,12 @@ bot.action("step_by_step", async (ctx) => {
 
     } catch (error) {
         console.error('Ошибка при получении пошагового рецепта:', error);
+        console.error('Детали ошибки:', {
+            message: error.message,
+            stack: error.stack,
+            href: hrefOnProduct
+        });
+
         // Удаляем сообщение о загрузке при ошибке
         if (loadingMessage) {
             try {
@@ -465,10 +471,23 @@ bot.action("step_by_step", async (ctx) => {
                 // Игнорируем ошибки удаления
             }
         }
+
+        // Определяем более информативное сообщение об ошибке
+        let errorMessage = "Произошла ошибка при получении пошагового рецепта. Попробуйте еще раз.";
+
+        if (error.message && error.message.includes('timeout')) {
+            errorMessage = "Превышено время ожидания. Попробуйте еще раз через несколько секунд.";
+        } else if (error.message && error.message.includes('Шаги не найдены')) {
+            errorMessage = "Пошаговый рецепт не найден для этого блюда. Попробуйте другое блюдо.";
+        } else if (error.message && error.message.includes('PLAYWRIGHT_UNAVAILABLE')) {
+            errorMessage = "Сервис временно недоступен. Попробуйте позже.";
+        }
+
         try {
-            await ctx.reply("Произошла ошибка при получении пошагового рецепта. Попробуйте еще раз.");
+            await ctx.reply(errorMessage);
         } catch (e) {
             // Игнорируем ошибки отправки сообщения
+            console.error('Ошибка отправки сообщения об ошибке:', e);
         }
     }
 });

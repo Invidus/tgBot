@@ -247,7 +247,7 @@ export const getFullRecepieLunch = async (ctx, userHrefs, loadingMessage = null)
     releasePage();
 
     // Формируем сообщение
-    const message = `Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n━━━━━━━━━━━━━━━━━━━━\n${proteins}${fat}${carbohydrates}\n${ccals}\n`;
+    const message = `Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n━━━━━━━━━━\n${proteins}${fat}${carbohydrates}\n${ccals}\n`;
 
     // Кэшируем результат
     cacheRecipe(hrefOnProduct, message);
@@ -297,7 +297,7 @@ export const getFullRecepieLunch = async (ctx, userHrefs, loadingMessage = null)
       $('#recept-list > div.ingredient meta').each((index, element) => {
         recepieList.push($(element).attr("content"));
       });
-      const message = `Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n━━━━━━━━━━━━━━━━━━━━\nБелки: не указано Жиры: не указано Углеводы: не указано\nКалорийность на 100г: не указано\n`;
+      const message = `Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n━━━━━━━━━━\nБелки: не указано Жиры: не указано Углеводы: не указано\nКалорийность на 100г: не указано\n`;
 
       // Редактируем сообщение о загрузке или отправляем новое
       if (loadingMessage) {

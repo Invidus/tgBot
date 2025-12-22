@@ -87,8 +87,9 @@ export const isBrowserInitialized = () => {
 
 /**
  * Получает новую страницу из переиспользуемого браузера
+ * @param {boolean} allowImages - Разрешить загрузку изображений (по умолчанию false)
  */
-export const getPage = async () => {
+export const getPage = async (allowImages = false) => {
   // Если Playwright недоступен, выбрасываем ошибку для fallback
   if (!playwrightAvailable) {
     throw new Error('PLAYWRIGHT_UNAVAILABLE');
@@ -132,11 +133,20 @@ export const getPage = async () => {
     // Блокируем загрузку ненужных ресурсов для ускорения
     await page.route('**/*', (route) => {
       const resourceType = route.request().resourceType();
-      // Блокируем изображения, шрифты, медиа - оставляем только документы, скрипты, стили
-      if (['image', 'font', 'media', 'stylesheet'].includes(resourceType)) {
-        route.abort();
+      // Если разрешены изображения, блокируем только шрифты, медиа и стили
+      // Иначе блокируем изображения, шрифты, медиа, стили
+      if (allowImages) {
+        if (['font', 'media', 'stylesheet'].includes(resourceType)) {
+          route.abort();
+        } else {
+          route.continue();
+        }
       } else {
-        route.continue();
+        if (['image', 'font', 'media', 'stylesheet'].includes(resourceType)) {
+          route.abort();
+        } else {
+          route.continue();
+        }
       }
     });
 

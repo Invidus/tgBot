@@ -4,6 +4,7 @@ import cheerio from "cheerio";
 import { getPage, releasePage, isBrowserInitialized } from "./browserManager.js";
 import { getDetailedMenuKeyboard } from "./innerButtons.js";
 import { getCachedRecipe, cacheRecipe } from "./recipeCache.js";
+import { validateAndTruncateMessage } from "./messageUtils.js";
 
 
 function getRandomInt(min, max) {
@@ -13,7 +14,6 @@ function getRandomInt(min, max) {
 }
 
 export const getDinner = async (ctx, userHrefs, retryCount = 0) => {
-  const dataArr = [];
   const MAX_RETRIES = 5; // Максимум 5 попыток, защита от переполнения стека
   try {
     const axiosResponse = await axios.request({
@@ -27,8 +27,17 @@ export const getDinner = async (ctx, userHrefs, retryCount = 0) => {
     })
 
     const $ = cheerio.load(axiosResponse.data);
-    let row = "";
     const countCard = $("section#cooking > .cooking-block > .cn-item:not(.ads_enabled)").length;
+
+    // Проверяем, что есть карточки
+    if (countCard === 0) {
+      if (retryCount < MAX_RETRIES) {
+        return await getDinner(ctx, userHrefs, retryCount + 1);
+      } else {
+        return "К сожалению, не удалось найти подходящее блюдо. Попробуйте позже.";
+      }
+    }
+
     const randomCard = getRandomInt(0, countCard);
     let foundData = null;
 
@@ -55,19 +64,15 @@ export const getDinner = async (ctx, userHrefs, retryCount = 0) => {
       }
     }
 
-    dataArr.push(foundData);
-    row = foundData.productHeader  + "\nОписание: " + foundData.productDiscription + "\n\nВремя приготовления блюда: "
+    const row = foundData.productHeader  + "\nОписание: " + foundData.productDiscription + "\n\nВремя приготовления блюда: "
     + foundData.timeToCook + "\nКалорийность блюда на 100 г: " + foundData.ccal + "\nСсылка на рецепт: " + foundData.hrefOnProduct;
 
-        const chatId = ctx.chat.id;
-        if (!userHrefs.has(chatId)) {
-          userHrefs.set(chatId, {});
-        }
+    const chatId = ctx.chat.id;
+    if (!userHrefs.has(chatId)) {
+      userHrefs.set(chatId, {});
+    }
     userHrefs.get(chatId).dinner = foundData.hrefOnProduct;
 
-    if (dataArr.length > 0) {
-      dataArr.splice(0, dataArr.length)
-    }
     return row;
   } catch(error) {
     console.error('Ошибка при получении рецепта:', error);
@@ -235,14 +240,18 @@ export const getFullRecepieDinner = async (ctx, userHrefs, loadingMessage = null
     const carbohydrates = nutritionData.carbohydrates ? 'Углеводы: ' + nutritionData.carbohydrates + 'г ' : 'Углеводы: не указано ';
     const ccals = nutritionData.ccals ? 'Калорийность на 100 г: ' + nutritionData.ccals + ' ккал ' : 'Калорийность на 100г: не указано ';
 
-    const recepieList = ingredientsData;
+    const recepieList = ingredientsData || [];
 
     // Закрываем страницу, но не браузер (он переиспользуется)
     await page.close();
     releasePage();
 
     // Формируем сообщение
-    const message = `Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n━━━━━━━━━━\n${proteins}${fat}${carbohydrates}\n${ccals}\n`;
+    const ingredientsText = recepieList.length > 0 ? recepieList.join('\n') : 'Ингредиенты не указаны';
+    let message = `Порций: ${portion}\nЧто потребуется:\n${ingredientsText}\n━━━━━━━━━━\n${proteins}${fat}${carbohydrates}\n${ccals}\n`;
+
+    // Валидируем и обрезаем сообщение при необходимости
+    message = validateAndTruncateMessage(message);
 
     // Кэшируем результат
     cacheRecipe(hrefOnProduct, message);
@@ -292,7 +301,11 @@ export const getFullRecepieDinner = async (ctx, userHrefs, loadingMessage = null
       $('#recept-list > div.ingredient meta').each((index, element) => {
         recepieList.push($(element).attr("content"));
       });
-      const message = `Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n━━━━━━━━━━\nБелки: не указано Жиры: не указано Углеводы: не указано\nКалорийность на 100г: не указано\n`;
+      const ingredientsText = recepieList.length > 0 ? recepieList.join('\n') : 'Ингредиенты не указаны';
+      let message = `Порций: ${portion}\nЧто потребуется:\n${ingredientsText}\n━━━━━━━━━━\nБелки: не указано Жиры: не указано Углеводы: не указано\nКалорийность на 100г: не указано\n`;
+
+      // Валидируем и обрезаем сообщение при необходимости
+      message = validateAndTruncateMessage(message);
 
       // Редактируем сообщение о загрузке или отправляем новое
       if (loadingMessage) {

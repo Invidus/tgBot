@@ -4,6 +4,7 @@ import cheerio from "cheerio";
 import { getPage, releasePage, isBrowserInitialized } from "./browserManager.js";
 import { getDetailedMenuKeyboard } from "./innerButtons.js";
 import { getCachedRecipe, cacheRecipe } from "./recipeCache.js";
+import { validateAndTruncateMessage } from "./messageUtils.js";
 
 
 
@@ -14,15 +15,24 @@ function getRandomInt(min, max) {
 }
 
 export const search = async (ctx, userHrefs, searchStr, retryCount = 0) => {
-  const dataArr = [];
   const MAX_RETRIES = 5;
+  const MAX_SEARCH_LENGTH = 200; // Максимальная длина поискового запроса
 
   try {
-    if (!searchStr) {
+    if (!searchStr || typeof searchStr !== 'string') {
       return "Ошибка: поисковый запрос не передан";
     }
 
-    const searchStrEncoded = searchStr.replace(/\s+/g, '+');// оставляем такой вариант кодировки, так нужно для сайта
+    const trimmedQuery = searchStr.trim();
+    if (trimmedQuery.length === 0) {
+      return "Ошибка: поисковый запрос не может быть пустым";
+    }
+
+    if (trimmedQuery.length > MAX_SEARCH_LENGTH) {
+      return `Ошибка: поисковый запрос слишком длинный (максимум ${MAX_SEARCH_LENGTH} символов)`;
+    }
+
+    const searchStrEncoded = trimmedQuery.replace(/\s+/g, '+');// оставляем такой вариант кодировки, так нужно для сайта
     const searchUrl = `https://1000.menu/cooking/search?ms=1&str=${searchStrEncoded}`;
     console.log('🔍 Search URL:', searchUrl);
 
@@ -41,7 +51,7 @@ export const search = async (ctx, userHrefs, searchStr, retryCount = 0) => {
     const countCard = $(".cooking-block > .cn-item:not(.ads_enabled)").length;
 
     if (countCard === 0) {
-      return `По запросу "${searchStr}" ничего не найдено. Попробуйте другой запрос.`;
+      return `По запросу "${trimmedQuery}" ничего не найдено. Попробуйте другой запрос.`;
     }
 
     const randomCard = getRandomInt(0, countCard);
@@ -64,14 +74,13 @@ export const search = async (ctx, userHrefs, searchStr, retryCount = 0) => {
 
     if (!foundData || foundData.productHeader == "") {
       if (retryCount < MAX_RETRIES) {
-        return await search(ctx, userHrefs, searchStr, retryCount + 1);
+        return await search(ctx, userHrefs, trimmedQuery, retryCount + 1);
       } else {
-        return `К сожалению, не удалось найти подходящее блюдо по запросу "${searchStr}". Попробуйте другой запрос.`;
+        return `К сожалению, не удалось найти подходящее блюдо по запросу "${trimmedQuery}". Попробуйте другой запрос.`;
       }
     }
 
-    dataArr.push(foundData);
-    row = foundData.productHeader + "\nОписание: " + foundData.productDiscription + "\n\nВремя приготовления блюда: "
+    const row = foundData.productHeader + "\nОписание: " + foundData.productDiscription + "\n\nВремя приготовления блюда: "
     + foundData.timeToCook + "\nКалорийность блюда на 100 г: " + foundData.ccal + "\nСсылка на рецепт: " + foundData.hrefOnProduct;
 
     // Сохраняем hrefOnProduct в Map для текущего пользователя
@@ -80,10 +89,6 @@ export const search = async (ctx, userHrefs, searchStr, retryCount = 0) => {
       userHrefs.set(chatId, {});
     }
     userHrefs.get(chatId).search = foundData.hrefOnProduct;
-
-    if (dataArr.length > 0) {
-      dataArr.splice(0, dataArr.length);
-    }
 
     return row;
   } catch(error) {
@@ -252,14 +257,18 @@ export const getFullRecepieSearch = async (ctx, userHrefs, loadingMessage = null
     const carbohydrates = nutritionData.carbohydrates ? 'Углеводы: ' + nutritionData.carbohydrates + 'г ' : 'Углеводы: не указано ';
     const ccals = nutritionData.ccals ? 'Калорийность на 100 г: ' + nutritionData.ccals + ' ккал ' : 'Калорийность на 100г: не указано ';
 
-    const recepieList = ingredientsData;
+    const recepieList = ingredientsData || [];
 
     // Закрываем страницу, но не браузер (он переиспользуется)
     await page.close();
     releasePage();
 
     // Формируем сообщение
-    const message = `Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n━━━━━━━━━━\n${proteins}${fat}${carbohydrates}\n${ccals}\n`;
+    const ingredientsText = recepieList.length > 0 ? recepieList.join('\n') : 'Ингредиенты не указаны';
+    let message = `Порций: ${portion}\nЧто потребуется:\n${ingredientsText}\n━━━━━━━━━━\n${proteins}${fat}${carbohydrates}\n${ccals}\n`;
+
+    // Валидируем и обрезаем сообщение при необходимости
+    message = validateAndTruncateMessage(message);
 
     // Кэшируем результат
     cacheRecipe(hrefOnProduct, message);
@@ -309,7 +318,11 @@ export const getFullRecepieSearch = async (ctx, userHrefs, loadingMessage = null
       $('#recept-list > div.ingredient meta').each((index, element) => {
         recepieList.push($(element).attr("content"));
       });
-      const message = `Порций: ${portion}\nЧто потребуется:\n${recepieList.join('\n')}\n━━━━━━━━━━\nБелки: не указано Жиры: не указано Углеводы: не указано\nКалорийность на 100г: не указано\n`;
+      const ingredientsText = recepieList.length > 0 ? recepieList.join('\n') : 'Ингредиенты не указаны';
+      let message = `Порций: ${portion}\nЧто потребуется:\n${ingredientsText}\n━━━━━━━━━━\nБелки: не указано Жиры: не указано Углеводы: не указано\nКалорийность на 100г: не указано\n`;
+
+      // Валидируем и обрезаем сообщение при необходимости
+      message = validateAndTruncateMessage(message);
 
       // Редактируем сообщение о загрузке или отправляем новое
       if (loadingMessage) {

@@ -121,10 +121,11 @@ export const getPage = async (allowImages = false) => {
     }
   }
 
+  let page = null;
   try {
     activePages++;
     console.log(`✅ Создание новой страницы. Активных: ${activePages}`);
-    const page = await browser.newPage();
+    page = await browser.newPage();
 
     // Устанавливаем таймауты для страницы (уменьшены для снижения нагрузки)
     page.setDefaultTimeout(15000); // 15 секунд
@@ -157,7 +158,21 @@ export const getPage = async (allowImages = false) => {
 
     return page;
   } catch (error) {
-    activePages--;
+    // Убеждаемся, что счетчик всегда уменьшается при ошибке
+    if (activePages > 0) {
+      activePages--;
+    }
+
+    // Если страница была создана, но произошла ошибка при настройке, закрываем её
+    if (page) {
+      try {
+        await page.close();
+      } catch (closeError) {
+        // Игнорируем ошибки закрытия страницы
+        console.error('⚠️ Ошибка при закрытии страницы после ошибки:', closeError);
+      }
+    }
+
     console.error('❌ Ошибка при создании страницы:', error);
     // Если браузер упал, пытаемся пересоздать
     if (error.message && (error.message.includes('Target closed') || error.message.includes('Browser closed'))) {

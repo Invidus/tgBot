@@ -8,6 +8,7 @@ import { search, getFullRecepieSearch } from "./search.js";
 import { initBrowser, closeBrowser } from "./browserManager.js";
 import { checkRateLimit } from "./rateLimiter.js";
 import { getStepByStepRecipe } from "./stepByStepRecipe.js";
+import { validateAndTruncateMessage } from "./messageUtils.js";
 
 // TTL(time to live) очистка старых записей
 const USER_DATA_TTL = 24 * 60 * 60 * 1000;
@@ -260,6 +261,8 @@ bot.action("another_dish", async (ctx) => {
     else if (state === 3) recipeRequested = isRecipeRequested(chatId, 'lunch');
     else if (state === 4) recipeRequested = isRecipeRequested(chatId, 'search');
 
+    // Валидируем и обрезаем сообщение при необходимости
+    messageText = validateAndTruncateMessage(messageText);
     try {
         await ctx.editMessageText(messageText, getDetailedMenuKeyboard(recipeRequested));
     } catch (error) {
@@ -499,7 +502,9 @@ const displayStep = async (ctx, chatId, stepIndex, steps, loadingMessage = null)
     }
 
     const step = steps[stepIndex];
-    const stepText = `${step.stepNumber}\n\n${step.instruction}`;
+    let stepText = `${step.stepNumber}\n\n${step.instruction}`;
+    // Валидируем и обрезаем сообщение при необходимости
+    stepText = validateAndTruncateMessage(stepText);
     const keyboard = getStepNavigationKeyboard(stepIndex, steps.length);
 
     try {
@@ -629,7 +634,9 @@ const updateStepMessage = async (ctx, chatId, stepIndex, steps) => {
     }
 
     const step = steps[stepIndex];
-    const stepText = `${step.stepNumber}\n\n${step.instruction}`;
+    let stepText = `${step.stepNumber}\n\n${step.instruction}`;
+    // Валидируем и обрезаем сообщение при необходимости
+    stepText = validateAndTruncateMessage(stepText);
     const keyboard = getStepNavigationKeyboard(stepIndex, steps.length);
 
     const messageId = ctx.callbackQuery?.message?.message_id;
@@ -824,6 +831,8 @@ bot.action("step_back", async (ctx) => {
                     messageText = "Меню блюда";
                 }
 
+                // Валидируем и обрезаем сообщение при необходимости
+                messageText = validateAndTruncateMessage(messageText);
                 await ctx.reply(messageText, getDetailedMenuKeyboard(recipeRequested));
             } catch (e) {
                 console.error('Ошибка при получении текста блюда:', e);

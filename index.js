@@ -728,7 +728,7 @@ bot.action("step_back", async (ctx) => {
     const recipeRequested = dishType ? isRecipeRequested(chatId, dishType) : false;
 
     // Если есть сохраненное сообщение с блюдом, редактируем его
-    if (recipeData && recipeData.dishMessageId && recipeData.dishMessageText) {
+    if (recipeData && recipeData.dishMessageId && recipeData.dishMessageText && recipeData.dishMessageText.trim()) {
         try {
             if (recipeData.hasPhoto && recipeData.dishPhotoFileId) {
                 // Если сообщение было с фото, редактируем caption
@@ -761,7 +761,7 @@ bot.action("step_back", async (ctx) => {
                         {
                             type: 'photo',
                             media: recipeData.dishPhotoFileId,
-                            caption: recipeData.dishMessageText
+                            caption: recipeData.dishMessageText || 'Меню блюда'
                         },
                         {
                             reply_markup: getDetailedMenuKeyboard(recipeRequested).reply_markup
@@ -773,7 +773,7 @@ bot.action("step_back", async (ctx) => {
                         chatId,
                         recipeData.dishMessageId,
                         null,
-                        recipeData.dishMessageText,
+                        recipeData.dishMessageText || 'Меню блюда',
                         getDetailedMenuKeyboard(recipeRequested)
                     );
                 }
@@ -782,11 +782,11 @@ bot.action("step_back", async (ctx) => {
                 try {
                     if (recipeData.hasPhoto && recipeData.dishPhotoFileId) {
                         await ctx.replyWithPhoto(recipeData.dishPhotoFileId, {
-                            caption: recipeData.dishMessageText,
+                            caption: recipeData.dishMessageText || 'Меню блюда',
                             reply_markup: getDetailedMenuKeyboard(recipeRequested).reply_markup
                         });
                     } else {
-                        await ctx.reply(recipeData.dishMessageText, getDetailedMenuKeyboard(recipeRequested));
+                        await ctx.reply(recipeData.dishMessageText || 'Меню блюда', getDetailedMenuKeyboard(recipeRequested));
                     }
                 } catch (e3) {
                     console.error('Ошибка при возврате к меню блюда:', e3);
@@ -798,26 +798,37 @@ bot.action("step_back", async (ctx) => {
         try {
             // Получаем текст блюда заново
             let messageText = "";
-            switch (state) {
-                case 1:
-                    messageText = await getBreakFast(ctx, userHrefs);
-                    break;
-                case 2:
-                    messageText = await getDinner(ctx, userHrefs);
-                    break;
-                case 3:
-                    messageText = await getLunch(ctx, userHrefs);
-                    break;
-                case 4:
-                    const lastSearchQuery = userSearchQueries.get(chatId);
-                    if (lastSearchQuery) {
-                        messageText = await search(ctx, userHrefs, lastSearchQuery);
-                    } else {
-                        messageText = "Напишите что хотите найти: например ПП ужин, спаггети с креветками и т.п.";
-                    }
-                    break;
+            try {
+                switch (state) {
+                    case 1:
+                        messageText = await getBreakFast(ctx, userHrefs);
+                        break;
+                    case 2:
+                        messageText = await getDinner(ctx, userHrefs);
+                        break;
+                    case 3:
+                        messageText = await getLunch(ctx, userHrefs);
+                        break;
+                    case 4:
+                        const lastSearchQuery = userSearchQueries.get(chatId);
+                        if (lastSearchQuery) {
+                            messageText = await search(ctx, userHrefs, lastSearchQuery);
+                        } else {
+                            messageText = "Напишите что хотите найти: например ПП ужин, спаггети с креветками и т.п.";
+                        }
+                        break;
+                }
+
+                // Проверяем, что текст не пустой
+                if (!messageText || !messageText.trim()) {
+                    messageText = "Меню блюда";
+                }
+
+                await ctx.reply(messageText, getDetailedMenuKeyboard(recipeRequested));
+            } catch (e) {
+                console.error('Ошибка при получении текста блюда:', e);
+                await ctx.reply("Меню блюда", getDetailedMenuKeyboard(recipeRequested));
             }
-            await ctx.reply(messageText, getDetailedMenuKeyboard(recipeRequested));
         } catch (e) {
             console.error('Ошибка при возврате к меню блюда:', e);
         }

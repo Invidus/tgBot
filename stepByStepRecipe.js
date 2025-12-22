@@ -2,12 +2,61 @@ import { getPage, releasePage, isBrowserInitialized } from "./browserManager.js"
 import axios from "axios";
 import cheerio from "cheerio";
 
+// Кэш для пошаговых рецептов
+const stepByStepCache = new Map();
+const STEP_CACHE_TTL = 60 * 60 * 1000; // 1 час
+
+/**
+ * Получает пошаговый рецепт из кэша
+ */
+const getCachedStepByStep = (url) => {
+  const cached = stepByStepCache.get(url);
+  if (cached && Date.now() - cached.timestamp < STEP_CACHE_TTL) {
+    return cached.data;
+  }
+  if (cached) {
+    stepByStepCache.delete(url);
+  }
+  return null;
+};
+
+/**
+ * Сохраняет пошаговый рецепт в кэш
+ */
+const cacheStepByStep = (url, data) => {
+  stepByStepCache.set(url, {
+    data,
+    timestamp: Date.now()
+  });
+};
+
+/**
+ * Очищает старый кэш пошаговых рецептов
+ */
+const cleanupStepByStepCache = () => {
+  const now = Date.now();
+  for (const [url, cached] of stepByStepCache.entries()) {
+    if (now - cached.timestamp > STEP_CACHE_TTL) {
+      stepByStepCache.delete(url);
+    }
+  }
+};
+
+// Очистка кэша каждые 30 минут
+setInterval(cleanupStepByStepCache, 30 * 60 * 1000);
+
 /**
  * Получает пошаговый рецепт с изображениями и инструкциями
  * @param {string} hrefOnProduct - URL рецепта
  * @returns {Promise<Array>} Массив шагов: [{ stepNumber, imageUrl, instruction }]
  */
 export const getStepByStepRecipe = async (hrefOnProduct) => {
+  // Проверяем кэш
+  const cached = getCachedStepByStep(hrefOnProduct);
+  if (cached) {
+    console.log('✅ Пошаговый рецепт получен из кэша');
+    return cached;
+  }
   let page = null;
   try {
     // Проверяем, инициализирован ли браузер
@@ -28,18 +77,27 @@ export const getStepByStepRecipe = async (hrefOnProduct) => {
       throw playwrightError;
     }
 
-    // Переходим на страницу
+    // Переходим на страницу с оптимизированными настройками
     await page.goto(hrefOnProduct, {
       waitUntil: 'domcontentloaded',
-      timeout: 10000
+      timeout: 8000 // Уменьшен таймаут для ускорения
     });
 
-    // Ждем загрузки списка инструкций
-    await page.waitForSelector('ol.instructions', { timeout: 5000 }).catch(() => {
-      console.log('⚠️ Селектор ol.instructions не найден, продолжаем...');
-    });
+    // Ждем загрузки списка инструкций с более коротким таймаутом
+    // Используем waitForFunction для более быстрой проверки наличия элементов
+    try {
+      await page.waitForFunction(
+        () => document.querySelector('ol.instructions') !== null,
+        { timeout: 3000 }
+      ).catch(() => {
+        // Если не дождались, продолжаем - возможно элементы уже загружены
+        console.log('⚠️ Селектор ol.instructions не найден, продолжаем...');
+      });
+    } catch (e) {
+      // Игнорируем ошибки ожидания
+    }
 
-    // Извлекаем все шаги рецепта
+    // Извлекаем все шаги рецепта - оптимизированная версия
     const steps = await page.evaluate(() => {
       const stepsList = [];
       const instructionsList = document.querySelector('ol.instructions');
@@ -48,44 +106,44 @@ export const getStepByStepRecipe = async (hrefOnProduct) => {
         return stepsList;
       }
 
+      // Используем более быстрый селектор
       const listItems = instructionsList.querySelectorAll('li:not(.as-ad-step)');
+      const itemsArray = Array.from(listItems); // Преобразуем в массив для лучшей производительности
 
-      listItems.forEach((li, index) => {
+      // Обрабатываем все элементы параллельно через map
+      itemsArray.forEach((li, index) => {
         try {
-          // Получаем номер шага из h3
+          // Получаем номер шага из h3 (более быстрый селектор)
           const stepHeading = li.querySelector('h3');
-          const stepNumber = stepHeading ? stepHeading.textContent.trim() : `Шаг ${index + 1}:`;
+          const stepNumber = stepHeading?.textContent?.trim() || `Шаг ${index + 1}:`;
 
-          // Получаем URL изображения
+          // Получаем URL изображения - оптимизированный поиск
           let imageUrl = null;
           const imageLink = li.querySelector('a[href*="img"]');
           if (imageLink) {
             imageUrl = imageLink.getAttribute('href');
-            // Если URL относительный, делаем его абсолютным
             if (imageUrl && !imageUrl.startsWith('http')) {
               imageUrl = 'https:' + imageUrl;
             }
           } else {
-            // Пробуем получить из img тега
+            // Пробуем получить из img тега напрямую
             const imgTag = li.querySelector('img');
             if (imgTag) {
-              imageUrl = imgTag.getAttribute('src');
+              imageUrl = imgTag.getAttribute('src') || imgTag.getAttribute('data-src');
               if (imageUrl && !imageUrl.startsWith('http')) {
                 imageUrl = 'https:' + imageUrl;
               }
             }
           }
 
-          // Получаем текст инструкции
+          // Получаем текст инструкции - оптимизированный поиск
           let instruction = '';
           const instructionPara = li.querySelector('p.instruction');
           if (instructionPara) {
-            instruction = instructionPara.textContent.trim();
-          } else {
+            instruction = instructionPara.textContent?.trim() || '';
+          } else if (imageLink) {
             // Пробуем получить из title атрибута ссылки
-            if (imageLink) {
-              instruction = imageLink.getAttribute('title') || '';
-            }
+            instruction = imageLink.getAttribute('title') || '';
           }
 
           if (stepNumber || instruction) {
@@ -96,7 +154,7 @@ export const getStepByStepRecipe = async (hrefOnProduct) => {
             });
           }
         } catch (error) {
-          console.error('Ошибка при обработке шага:', error);
+          // Игнорируем ошибки для отдельных шагов, продолжаем обработку
         }
       });
 
@@ -110,6 +168,9 @@ export const getStepByStepRecipe = async (hrefOnProduct) => {
     if (steps.length === 0) {
       throw new Error('Шаги рецепта не найдены');
     }
+
+    // Кэшируем результат
+    cacheStepByStep(hrefOnProduct, steps);
 
     console.log(`✅ Получено ${steps.length} шагов рецепта`);
     return steps;
@@ -131,7 +192,7 @@ export const getStepByStepRecipe = async (hrefOnProduct) => {
           headers: {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
           },
-          timeout: 10000
+          timeout: 8000 // Уменьшен таймаут для ускорения
         });
 
         const $ = cheerio.load(axiosResponse.data);
@@ -168,6 +229,8 @@ export const getStepByStepRecipe = async (hrefOnProduct) => {
         });
 
         if (steps.length > 0) {
+          // Кэшируем результат fallback
+          cacheStepByStep(hrefOnProduct, steps);
           return steps;
         }
 

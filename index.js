@@ -9,6 +9,7 @@ import { initBrowser, closeBrowser } from "./browserManager.js";
 import { checkRateLimit } from "./rateLimiter.js";
 import { getStepByStepRecipe } from "./stepByStepRecipe.js";
 import { validateAndTruncateMessage } from "./messageUtils.js";
+import { initTables, closePool } from "./dataBase.js";
 
 // TTL(time to live) очистка старых записей
 const USER_DATA_TTL = 24 * 60 * 60 * 1000;
@@ -1251,10 +1252,18 @@ bot.on("message", async ctx => {
 initBrowser()
   .then(() => {
     console.log('✅ Браузер Playwright готов');
+    // Инициализируем БД
+    return initTables();
+  })
+  .then((dbInitialized) => {
+    if (dbInitialized) {
+      console.log('✅ База данных готова');
+    } else {
+      console.warn('⚠️ База данных не инициализирована, избранное недоступно');
+    }
   })
   .catch((err) => {
-    console.warn('⚠️ Браузер Playwright не удалось инициализировать:', err.message);
-    console.warn('⚠️ Бот будет работать в режиме fallback (без питательных веществ)');
+    console.warn('⚠️ Ошибка инициализации:', err.message);
   })
   .finally(() => {
     // Запускаем бота в любом случае
@@ -1274,7 +1283,8 @@ const shutdown = async (signal) => {
   try {
     await bot.stop(signal);
     await closeBrowser();
-    console.log('✅ Бот и браузер успешно остановлены');
+    await closePool(); // Закрываем пул подключений
+    console.log('✅ Бот, браузер и БД успешно остановлены');
     process.exit(0);
   } catch (err) {
     console.error('❌ Ошибка при завершении работы:', err);

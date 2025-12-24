@@ -44,4 +44,12 @@ export const config = {
   "foodUrl": process.env.FOOD_URL || "https://1000.menu/catalog/na-zavtrak",
   "dinnerUrl": process.env.DINNER_URL || "https://1000.menu/catalog/pp-obed",
   "lunchUrl": process.env.LUNCH_URL || "https://1000.menu/catalog/zvanji-uzhin",
+  "database": {
+    "host": process.env.DB_HOST || "localhost",
+    "port": process.env.DB_PORT || 5432,
+    "database": process.env.DB_NAME || "tgbot_db",
+    "user": process.env.DB_USER || "tgbot_user",
+    "password": process.env.DB_PASSWORD,
+    "ssl": process.env.DB_SSL === "true" ? { rejectUnauthorized: false } : false
+  }
 }

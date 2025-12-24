@@ -15,7 +15,8 @@
     "dotenv": "^17.2.3",
     "playwright": "^1.45.2",
     "telegraf": "^4.16.3",
-    "telegraf-pagination": "^1.4.1"
+    "telegraf-pagination": "^1.4.1",
+    "pg": "^8.11.3"
   },
   "keywords": [],
   "description": ""

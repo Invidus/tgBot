@@ -26,6 +26,11 @@ const userRecipeRequested = new Map();
 // Хранилище пошаговых рецептов: chatId -> { steps: Array, currentStep: number, dishMessageId: number, dishMessageText: string }
 const userStepByStepRecipes = new Map();
 
+// Хранилище истории рецептов: chatId -> { dishType: [{ url, text, hasPhoto, photoFileId }] }
+// Ограничение: максимум 10 рецептов на тип блюда для оптимизации памяти
+const userRecipeHistory = new Map();
+const MAX_HISTORY_SIZE = 10;
+
 // Функции для работы с запрошенными рецептами
 const setRecipeRequested = (chatId, dishType) => {
     if (!userRecipeRequested.has(chatId)) {
@@ -65,12 +70,51 @@ const resetUserState = (chatId) => {
     userStates.set(chatId, 0);
 };
 
+// Функции для работы с историей рецептов (оптимизированы для скорости)
+const saveRecipeToHistory = (chatId, dishType, url, text, hasPhoto = false, photoFileId = null) => {
+    if (!url || !text) return; // Пропускаем пустые данные
+
+    let history = userRecipeHistory.get(chatId);
+    if (!history) {
+        history = { breakfast: [], lunch: [], dinner: [], search: [] };
+        userRecipeHistory.set(chatId, history);
+    }
+
+    if (!history[dishType]) {
+        history[dishType] = [];
+    }
+
+    // Добавляем в конец (последний рецепт)
+    history[dishType].push({ url, text, hasPhoto, photoFileId });
+
+    // Ограничиваем размер истории для оптимизации памяти
+    if (history[dishType].length > MAX_HISTORY_SIZE) {
+        history[dishType].shift(); // Удаляем самый старый
+    }
+};
+
+const getPreviousRecipe = (chatId, dishType) => {
+    const history = userRecipeHistory.get(chatId);
+    if (!history || !history[dishType] || history[dishType].length === 0) {
+        return null;
+    }
+    // Получаем последний рецепт из истории и удаляем его (LIFO)
+    // НЕ сохраняем текущий рецепт обратно - это предотвращает цикл
+    return history[dishType].pop();
+};
+
+const hasRecipeHistory = (chatId, dishType) => {
+    const history = userRecipeHistory.get(chatId);
+    return history && history[dishType] && history[dishType].length > 0;
+};
+
 // Вспомогательные функции для работы с hrefOnProduct
 const resetUserHrefs = (chatId) => {
     userHrefs.delete(chatId);
     userSearchQueries.delete(chatId);
     userRecipeRequested.delete(chatId);
     userStepByStepRecipes.delete(chatId);
+    userRecipeHistory.delete(chatId);
 };
 // Функция очистки старых данных
 const cleanupOldUsers = () => {
@@ -82,6 +126,7 @@ const cleanupOldUsers = () => {
         userSearchQueries.delete(chatId);
         userRecipeRequested.delete(chatId);
         userStepByStepRecipes.delete(chatId);
+        userRecipeHistory.delete(chatId);
         userLastActivity.delete(chatId);
       }
     }
@@ -92,6 +137,40 @@ setInterval(cleanupOldUsers, 6 * 60 * 60 * 1000);
 const updateUserActivity = (chatId) => {
     userLastActivity.set(chatId, Date.now());
   };
+
+// Функция для показа меню выбора типа блюда
+const showDishTypeMenu = async (ctx, message = "Выберите тип блюда:") => {
+    try {
+        await ctx.editMessageText(message, {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "Завтрак🍏", callback_data: "breakfast" }],
+                    [{ text: "Обед🍜", callback_data: "dinner" }],
+                    [{ text: "Ужин🍝", callback_data: "lunch" }],
+                    [{ text: "Поиск🔎", callback_data: "search" }],
+                    [{ text: "Закрыть❌", callback_data: "close_menu" }]
+                ]
+            }
+        });
+    } catch (error) {
+        // Если не удалось отредактировать сообщение, отправляем новое
+        if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
+            // Сообщение уже такое же, это нормально
+        } else {
+            await ctx.reply(message, {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "Завтрак🍏", callback_data: "breakfast" }],
+                        [{ text: "Обед🍜", callback_data: "dinner" }],
+                        [{ text: "Ужин🍝", callback_data: "lunch" }],
+                        [{ text: "Поиск🔎", callback_data: "search" }],
+                        [{ text: "Закрыть❌", callback_data: "close_menu" }]
+                    ]
+                }
+            });
+        }
+    }
+};
 
   bot.start(async (ctx) => {
     const chatId = ctx.chat.id;
@@ -125,23 +204,37 @@ bot.command("removekeyboard", async (ctx) => {
             remove_keyboard: true
         }
     });
-});
+ });
 
  // Обработка inline-кнопок
 bot.action("breakfast", async (ctx) => {
     await ctx.answerCbQuery("Загрузка...", true);
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
+
+    // Сохраняем текущий рецепт в историю перед получением нового
+    const currentMessage = ctx.callbackQuery?.message;
+    const currentUrl = userHrefs.get(chatId)?.breakfast;
+    if (currentUrl && currentMessage) {
+        const currentText = currentMessage.text || currentMessage.caption || '';
+        if (currentText.trim()) {
+            const hasPhoto = !!(currentMessage.photo && currentMessage.photo.length > 0);
+            const photoFileId = hasPhoto ? currentMessage.photo[currentMessage.photo.length - 1]?.file_id : null;
+            saveRecipeToHistory(chatId, 'breakfast', currentUrl, currentText, hasPhoto, photoFileId);
+        }
+    }
+
     resetRecipeRequested(chatId, 'breakfast'); // Сбрасываем флаг при выборе нового блюда
     let breakfast = await getBreakFast(ctx, userHrefs);
     const recipeRequested = isRecipeRequested(chatId, 'breakfast');
+    const hasHistory = hasRecipeHistory(chatId, 'breakfast');
     try {
-        await ctx.editMessageText(breakfast, getDetailedMenuKeyboard(recipeRequested));
+        await ctx.editMessageText(breakfast, getDetailedMenuKeyboard(recipeRequested, hasHistory));
     } catch (error) {
         if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
             await ctx.answerCbQuery("Показан тот же результат. Попробуйте еще раз.");
         } else {
-            await ctx.reply(breakfast, getDetailedMenuKeyboard(recipeRequested));
+            await ctx.reply(breakfast, getDetailedMenuKeyboard(recipeRequested, hasHistory));
         }
     }
     setUserState(chatId, 1);
@@ -151,17 +244,31 @@ bot.action("dinner", async (ctx) => {
     await ctx.answerCbQuery("Загрузка...", true);
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
+
+    // Сохраняем текущий рецепт в историю перед получением нового
+    const currentMessage = ctx.callbackQuery?.message;
+    const currentUrl = userHrefs.get(chatId)?.dinner;
+    if (currentUrl && currentMessage) {
+        const currentText = currentMessage.text || currentMessage.caption || '';
+        if (currentText.trim()) {
+            const hasPhoto = !!(currentMessage.photo && currentMessage.photo.length > 0);
+            const photoFileId = hasPhoto ? currentMessage.photo[currentMessage.photo.length - 1]?.file_id : null;
+            saveRecipeToHistory(chatId, 'dinner', currentUrl, currentText, hasPhoto, photoFileId);
+        }
+    }
+
     resetRecipeRequested(chatId, 'dinner'); // Сбрасываем флаг при выборе нового блюда
     setUserState(chatId, 2);
     let dinner = await getDinner(ctx, userHrefs);
     const recipeRequested = isRecipeRequested(chatId, 'dinner');
+    const hasHistory = hasRecipeHistory(chatId, 'dinner');
     try {
-        await ctx.editMessageText(dinner, getDetailedMenuKeyboard(recipeRequested));
+        await ctx.editMessageText(dinner, getDetailedMenuKeyboard(recipeRequested, hasHistory));
     } catch (error) {
         if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
             await ctx.answerCbQuery("Показан тот же результат. Попробуйте еще раз.");
         } else {
-            await ctx.reply(dinner, getDetailedMenuKeyboard(recipeRequested));
+            await ctx.reply(dinner, getDetailedMenuKeyboard(recipeRequested, hasHistory));
         }
     }
 });
@@ -170,17 +277,31 @@ bot.action("lunch", async (ctx) => {
     await ctx.answerCbQuery("Загрузка...", true);
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
+
+    // Сохраняем текущий рецепт в историю перед получением нового
+    const currentMessage = ctx.callbackQuery?.message;
+    const currentUrl = userHrefs.get(chatId)?.lunch;
+    if (currentUrl && currentMessage) {
+        const currentText = currentMessage.text || currentMessage.caption || '';
+        if (currentText.trim()) {
+            const hasPhoto = !!(currentMessage.photo && currentMessage.photo.length > 0);
+            const photoFileId = hasPhoto ? currentMessage.photo[currentMessage.photo.length - 1]?.file_id : null;
+            saveRecipeToHistory(chatId, 'lunch', currentUrl, currentText, hasPhoto, photoFileId);
+        }
+    }
+
     resetRecipeRequested(chatId, 'lunch'); // Сбрасываем флаг при выборе нового блюда
     setUserState(chatId, 3);
     let lunch = await getLunch(ctx, userHrefs);
     const recipeRequested = isRecipeRequested(chatId, 'lunch');
+    const hasHistory = hasRecipeHistory(chatId, 'lunch');
     try {
-        await ctx.editMessageText(lunch, getDetailedMenuKeyboard(recipeRequested));
+        await ctx.editMessageText(lunch, getDetailedMenuKeyboard(recipeRequested, hasHistory));
     } catch (error) {
         if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
             await ctx.answerCbQuery("Показан тот же результат. Попробуйте еще раз.");
         } else {
-            await ctx.reply(lunch, getDetailedMenuKeyboard(recipeRequested));
+            await ctx.reply(lunch, getDetailedMenuKeyboard(recipeRequested, hasHistory));
         }
     }
 });
@@ -206,6 +327,25 @@ bot.action("another_dish", async (ctx) => {
     updateUserActivity(chatId);
     const state = getUserState(chatId);
     console.log(`User ${chatId} state:`, state);
+
+    // Определяем тип блюда
+    let dishType = '';
+    if (state === 1) dishType = 'breakfast';
+    else if (state === 2) dishType = 'dinner';
+    else if (state === 3) dishType = 'lunch';
+    else if (state === 4) dishType = 'search';
+
+    // Сохраняем текущий рецепт в историю перед получением нового
+    const currentMessage = ctx.callbackQuery?.message;
+    const currentUrl = dishType ? userHrefs.get(chatId)?.[dishType] : null;
+    if (currentUrl && currentMessage && dishType) {
+        const currentText = currentMessage.text || currentMessage.caption || '';
+        if (currentText.trim()) {
+            const hasPhoto = !!(currentMessage.photo && currentMessage.photo.length > 0);
+            const photoFileId = hasPhoto ? currentMessage.photo[currentMessage.photo.length - 1]?.file_id : null;
+            saveRecipeToHistory(chatId, dishType, currentUrl, currentText, hasPhoto, photoFileId);
+        }
+    }
 
     // Сбрасываем флаг запрошенного рецепта при выборе нового блюда
     if (state === 1) resetRecipeRequested(chatId, 'breakfast');
@@ -250,7 +390,8 @@ bot.action("another_dish", async (ctx) => {
             }
             break;
         default:
-            await ctx.answerCbQuery("Сначала выберите тип блюда");
+            await ctx.answerCbQuery();
+            await showDishTypeMenu(ctx, "Сначала выберите тип блюда:");
             return;
     }
 
@@ -261,19 +402,116 @@ bot.action("another_dish", async (ctx) => {
     else if (state === 3) recipeRequested = isRecipeRequested(chatId, 'lunch');
     else if (state === 4) recipeRequested = isRecipeRequested(chatId, 'search');
 
+    // Проверяем наличие истории
+    const hasHistory = dishType ? hasRecipeHistory(chatId, dishType) : false;
+
     // Валидируем и обрезаем сообщение при необходимости
     messageText = validateAndTruncateMessage(messageText);
     try {
-        await ctx.editMessageText(messageText, getDetailedMenuKeyboard(recipeRequested));
+        await ctx.editMessageText(messageText, getDetailedMenuKeyboard(recipeRequested, hasHistory));
     } catch (error) {
         // Если сообщение не изменилось (такой же результат), это нормально
         if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
             await ctx.answerCbQuery("Показан тот же результат. Попробуйте еще раз.");
         } else {
             // Другая ошибка - отправляем новое сообщение
-            await ctx.reply(messageText, getDetailedMenuKeyboard(recipeRequested));
+            await ctx.reply(messageText, getDetailedMenuKeyboard(recipeRequested, hasHistory));
         }
     }
+    await ctx.answerCbQuery();
+});
+
+// Обработчик для возврата к предыдущему рецепту
+bot.action("previous_recipe", async (ctx) => {
+    const chatId = ctx.chat.id;
+    updateUserActivity(chatId);
+    const state = getUserState(chatId);
+
+    let dishType = '';
+    if (state === 1) dishType = 'breakfast';
+    else if (state === 2) dishType = 'dinner';
+    else if (state === 3) dishType = 'lunch';
+    else if (state === 4) dishType = 'search';
+
+    if (!dishType) {
+        await ctx.answerCbQuery();
+        await showDishTypeMenu(ctx, "Сначала выберите тип блюда:");
+        return;
+    }
+
+    // Получаем предыдущий рецепт из истории
+    // ВАЖНО: НЕ сохраняем текущий рецепт в историю здесь, чтобы избежать циклического переключения
+    // Текущий рецепт сохраняется только при нажатии "Другое блюдо" или выборе нового типа блюда
+    const previousRecipe = getPreviousRecipe(chatId, dishType);
+
+    if (!previousRecipe) {
+        await ctx.answerCbQuery("Нет предыдущих рецептов.");
+        return;
+    }
+
+    // Восстанавливаем предыдущий рецепт
+    if (!userHrefs.has(chatId)) {
+        userHrefs.set(chatId, {});
+    }
+    userHrefs.get(chatId)[dishType] = previousRecipe.url;
+    resetRecipeRequested(chatId, dishType);
+
+    // Проверяем, есть ли еще история
+    const hasHistory = hasRecipeHistory(chatId, dishType);
+    const recipeRequested = isRecipeRequested(chatId, dishType);
+
+    try {
+        // Используем сохраненный текст для быстрого отображения
+        const recipeText = validateAndTruncateMessage(previousRecipe.text || 'Меню блюда');
+        const keyboard = getDetailedMenuKeyboard(recipeRequested, hasHistory);
+
+        if (previousRecipe.hasPhoto && previousRecipe.photoFileId) {
+            // Если был фото, пытаемся отредактировать медиа
+            try {
+                await ctx.telegram.editMessageMedia(
+                    chatId,
+                    ctx.callbackQuery.message.message_id,
+                    null,
+                    {
+                        type: 'photo',
+                        media: previousRecipe.photoFileId,
+                        caption: recipeText
+                    },
+                    {
+                        reply_markup: keyboard.reply_markup
+                    }
+                );
+            } catch (e) {
+                // Если не удалось отредактировать медиа, удаляем и отправляем новое
+                try {
+                    await ctx.deleteMessage();
+                } catch (e2) {
+                    // Игнорируем ошибки
+                }
+                await ctx.replyWithPhoto(previousRecipe.photoFileId, {
+                    caption: recipeText,
+                    reply_markup: keyboard.reply_markup
+                });
+            }
+        } else {
+            // Если не было фото, редактируем текст
+            try {
+                await ctx.editMessageText(recipeText, keyboard);
+            } catch (e) {
+                // Если не удалось отредактировать, отправляем новое
+                try {
+                    await ctx.deleteMessage();
+                } catch (e2) {
+                    // Игнорируем ошибки
+                }
+                await ctx.reply(recipeText, keyboard);
+            }
+        }
+    } catch (error) {
+        console.error('Ошибка при возврате к предыдущему рецепту:', error);
+        await ctx.answerCbQuery("Ошибка при возврате к предыдущему рецепту.");
+    }
+
     await ctx.answerCbQuery();
 });
 
@@ -344,7 +582,7 @@ bot.action("ingredients", async (ctx) => {
                         // Игнорируем ошибки удаления
                     }
                 }
-                await ctx.reply("Сначала выберите завтрак, обед или ужин.");
+                await showDishTypeMenu(ctx, "Сначала выберите тип блюда:");
                 break;
         }
     } catch (error) {
@@ -401,7 +639,8 @@ bot.action("step_by_step", async (ctx) => {
     }
 
     if (!hrefOnProduct) {
-        await ctx.answerCbQuery("Сначала выберите блюдо из меню.");
+        await ctx.answerCbQuery();
+        await showDishTypeMenu(ctx, "Сначала выберите тип блюда:");
         return;
     }
 
@@ -733,6 +972,7 @@ bot.action("step_back", async (ctx) => {
     else if (state === 4) dishType = 'search';
 
     const recipeRequested = dishType ? isRecipeRequested(chatId, dishType) : false;
+    const hasHistory = dishType ? hasRecipeHistory(chatId, dishType) : false;
 
     // Если есть сохраненное сообщение с блюдом, редактируем его
     if (recipeData && recipeData.dishMessageId && recipeData.dishMessageText && recipeData.dishMessageText.trim()) {
@@ -744,7 +984,7 @@ bot.action("step_back", async (ctx) => {
                     recipeData.dishMessageId,
                     null,
                     recipeData.dishMessageText,
-                    getDetailedMenuKeyboard(recipeRequested)
+                    getDetailedMenuKeyboard(recipeRequested, hasHistory)
                 );
             } else {
                 // Если сообщение было текстовым, редактируем текст
@@ -753,7 +993,7 @@ bot.action("step_back", async (ctx) => {
                     recipeData.dishMessageId,
                     null,
                     recipeData.dishMessageText,
-                    getDetailedMenuKeyboard(recipeRequested)
+                    getDetailedMenuKeyboard(recipeRequested, hasHistory)
                 );
             }
         } catch (e) {
@@ -771,7 +1011,7 @@ bot.action("step_back", async (ctx) => {
                             caption: recipeData.dishMessageText || 'Меню блюда'
                         },
                         {
-                            reply_markup: getDetailedMenuKeyboard(recipeRequested).reply_markup
+                            reply_markup: getDetailedMenuKeyboard(recipeRequested, hasHistory).reply_markup
                         }
                     );
                 } else {
@@ -781,7 +1021,7 @@ bot.action("step_back", async (ctx) => {
                         recipeData.dishMessageId,
                         null,
                         recipeData.dishMessageText || 'Меню блюда',
-                        getDetailedMenuKeyboard(recipeRequested)
+                        getDetailedMenuKeyboard(recipeRequested, hasHistory)
                     );
                 }
             } catch (e2) {
@@ -790,10 +1030,10 @@ bot.action("step_back", async (ctx) => {
                     if (recipeData.hasPhoto && recipeData.dishPhotoFileId) {
                         await ctx.replyWithPhoto(recipeData.dishPhotoFileId, {
                             caption: recipeData.dishMessageText || 'Меню блюда',
-                            reply_markup: getDetailedMenuKeyboard(recipeRequested).reply_markup
+                            reply_markup: getDetailedMenuKeyboard(recipeRequested, hasHistory).reply_markup
                         });
                     } else {
-                        await ctx.reply(recipeData.dishMessageText || 'Меню блюда', getDetailedMenuKeyboard(recipeRequested));
+                        await ctx.reply(recipeData.dishMessageText || 'Меню блюда', getDetailedMenuKeyboard(recipeRequested, hasHistory));
                     }
                 } catch (e3) {
                     console.error('Ошибка при возврате к меню блюда:', e3);
@@ -806,14 +1046,14 @@ bot.action("step_back", async (ctx) => {
             // Получаем текст блюда заново
             let messageText = "";
             try {
-                switch (state) {
-                    case 1:
+        switch (state) {
+            case 1:
                         messageText = await getBreakFast(ctx, userHrefs);
-                        break;
-                    case 2:
+                break;
+            case 2:
                         messageText = await getDinner(ctx, userHrefs);
-                        break;
-                    case 3:
+                break;
+            case 3:
                         messageText = await getLunch(ctx, userHrefs);
                         break;
                     case 4:
@@ -823,8 +1063,8 @@ bot.action("step_back", async (ctx) => {
                         } else {
                             messageText = "Напишите что хотите найти: например ПП ужин, спаггети с креветками и т.п.";
                         }
-                        break;
-                }
+                break;
+        }
 
                 // Проверяем, что текст не пустой
                 if (!messageText || !messageText.trim()) {
@@ -833,10 +1073,10 @@ bot.action("step_back", async (ctx) => {
 
                 // Валидируем и обрезаем сообщение при необходимости
                 messageText = validateAndTruncateMessage(messageText);
-                await ctx.reply(messageText, getDetailedMenuKeyboard(recipeRequested));
+                await ctx.reply(messageText, getDetailedMenuKeyboard(recipeRequested, hasHistory));
             } catch (e) {
                 console.error('Ошибка при получении текста блюда:', e);
-                await ctx.reply("Меню блюда", getDetailedMenuKeyboard(recipeRequested));
+                await ctx.reply("Меню блюда", getDetailedMenuKeyboard(recipeRequested, hasHistory));
             }
         } catch (e) {
             console.error('Ошибка при возврате к меню блюда:', e);
@@ -925,8 +1165,8 @@ bot.action("close_menu", async (ctx) => {
 
 bot.action("start_bot", async (ctx) => {
     const chatId = ctx.chat.id;
-    resetUserState(chatId);
-    resetUserHrefs(chatId);
+        resetUserState(chatId);
+        resetUserHrefs(chatId);
 
     // Удаляем reply keyboard через отдельное сообщение
     await ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️', {
@@ -978,16 +1218,23 @@ bot.on("message", async ctx => {
                 // Сохраняем поисковый запрос для повторного использования
                 userSearchQueries.set(chatId, searchQuery);
 
+                // Сохраняем текущий рецепт в историю перед новым поиском (если есть)
+                const currentUrl = userHrefs.get(chatId)?.search;
+                // Получаем последнее сообщение бота для этого пользователя (если возможно)
+                // В данном случае мы не можем получить предыдущее сообщение напрямую,
+                // поэтому сохраняем только если есть текущий URL
+
                 const searchResult = await search(ctx, userHrefs, searchQuery);
 
                 if (searchResult && typeof searchResult === 'string') {
                     console.log('🔍 Результат поиска:', searchResult.length > 100 ? searchResult.substring(0, 100) + '...' : searchResult);
                     const recipeRequested = isRecipeRequested(chatId, 'search');
-                    await ctx.reply(searchResult, getDetailedMenuKeyboard(recipeRequested));
+                    const hasHistory = hasRecipeHistory(chatId, 'search');
+                    await ctx.reply(searchResult, getDetailedMenuKeyboard(recipeRequested, hasHistory));
                 } else {
                     console.error('❌ Неожиданный результат поиска:', searchResult);
                     await ctx.reply('Произошла ошибка при поиске. Попробуйте позже.');
-                }
+    }
             } catch (error) {
                 console.error('❌ Ошибка при поиске:', error);
                 console.error('❌ Stack trace:', error.stack);
@@ -1011,13 +1258,13 @@ initBrowser()
   })
   .finally(() => {
     // Запускаем бота в любом случае
-    bot.launch()
-      .then(() => {
-        console.log('✅ Бот успешно запущен!');
-      })
-      .catch((err) => {
-        console.error('❌ Ошибка при запуске бота:', err);
-        process.exit(1);
+bot.launch()
+  .then(() => {
+    console.log('✅ Бот успешно запущен!');
+  })
+  .catch((err) => {
+    console.error('❌ Ошибка при запуске бота:', err);
+    process.exit(1);
       });
   });
 

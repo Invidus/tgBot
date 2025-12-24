@@ -1,9 +1,14 @@
 import { Markup } from "telegraf";
 
-export const getDetailedMenuKeyboard = (recipeRequested = false) => {
+export const getDetailedMenuKeyboard = (recipeRequested = false, hasHistory = false) => {
   const buttons = [
     [Markup.button.callback("Другое блюдо🔁", "another_dish")],
   ];
+
+  // Кнопка "Вернуться к прошлому рецепту" под кнопкой "Другое блюдо"
+  if (hasHistory) {
+    buttons.push([Markup.button.callback("◀️ Вернуться к прошлому рецепту", "previous_recipe")]);
+  }
 
   // Если рецепт еще не был запрошен, показываем кнопки в одной строке
   if (!recipeRequested) {

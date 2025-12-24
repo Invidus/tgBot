@@ -67,10 +67,10 @@ export const getDinner = async (ctx, userHrefs, retryCount = 0) => {
     const row = foundData.productHeader  + "\nОписание: " + foundData.productDiscription + "\n\nВремя приготовления блюда: "
     + foundData.timeToCook + "\nКалорийность блюда на 100 г: " + foundData.ccal + "\nСсылка на рецепт: " + foundData.hrefOnProduct;
 
-    const chatId = ctx.chat.id;
-    if (!userHrefs.has(chatId)) {
-      userHrefs.set(chatId, {});
-    }
+        const chatId = ctx.chat.id;
+        if (!userHrefs.has(chatId)) {
+          userHrefs.set(chatId, {});
+        }
     userHrefs.get(chatId).dinner = foundData.hrefOnProduct;
 
     return row;
@@ -286,20 +286,20 @@ export const getFullRecepieDinner = async (ctx, userHrefs, loadingMessage = null
     }
 
     // Пробуем fallback на axios если Playwright не работает
-    try {
-      const axiosResponse = await axios.request({
-        method: "GET",
-        url: hrefOnProduct,
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+  try {
+    const axiosResponse = await axios.request({
+      method: "GET",
+      url: hrefOnProduct,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
         },
         timeout: 10000
       });
-      const $ = cheerio.load(axiosResponse.data);
+    const $ = cheerio.load(axiosResponse.data);
       const portion = $('#yield_num_input').attr('value') || 'не указано';
       const recepieList = [];
-      $('#recept-list > div.ingredient meta').each((index, element) => {
-        recepieList.push($(element).attr("content"));
+    $('#recept-list > div.ingredient meta').each((index, element) => {
+      recepieList.push($(element).attr("content"));
       });
       const ingredientsText = recepieList.length > 0 ? recepieList.join('\n') : 'Ингредиенты не указаны';
       let message = `Порций: ${portion}\nЧто потребуется:\n${ingredientsText}\n━━━━━━━━━━\nБелки: не указано Жиры: не указано Углеводы: не указано\nКалорийность на 100г: не указано\n`;
@@ -332,8 +332,8 @@ export const getFullRecepieDinner = async (ctx, userHrefs, loadingMessage = null
           // Игнорируем ошибки удаления
         }
       }
-      ctx.reply("Произошла ошибка при получении рецепта. Попробуйте выбрать другое блюдо.");
-    }
+    ctx.reply("Произошла ошибка при получении рецепта. Попробуйте выбрать другое блюдо.");
+  }
   }
 }
 

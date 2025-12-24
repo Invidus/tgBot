@@ -1,6 +1,6 @@
 import { Markup } from "telegraf";
 
-export const getDetailedMenuKeyboard = (recipeRequested = false, hasHistory = false) => {
+export const getDetailedMenuKeyboard = (recipeRequested = false, hasHistory = false, isInFavorites = false) => {
   const buttons = [
     [Markup.button.callback("Другое блюдо🔁", "another_dish")],
   ];
@@ -8,6 +8,13 @@ export const getDetailedMenuKeyboard = (recipeRequested = false, hasHistory = fa
   // Кнопка "Вернуться к прошлому рецепту" под кнопкой "Другое блюдо"
   if (hasHistory) {
     buttons.push([Markup.button.callback("◀️ Вернуться к прошлому рецепту", "previous_recipe")]);
+  }
+
+  // Кнопка избранного
+  if (isInFavorites) {
+    buttons.push([Markup.button.callback("❌ Удалить из избранного", "remove_from_favorites")]);
+  } else {
+    buttons.push([Markup.button.callback("⭐ Добавить в избранное", "add_to_favorites")]);
   }
 
   // Если рецепт еще не был запрошен, показываем кнопки в одной строке
@@ -25,6 +32,57 @@ export const getDetailedMenuKeyboard = (recipeRequested = false, hasHistory = fa
   ]);
 
   return Markup.inlineKeyboard(buttons);
+};
+
+// Клавиатура для списка избранного
+export const getFavoritesKeyboard = (favorites, currentPage = 0, pageSize = 5) => {
+  const buttons = [];
+  const startIndex = currentPage * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, favorites.length);
+  const currentPageFavorites = favorites.slice(startIndex, endIndex);
+
+  // Кнопки для каждого рецепта
+  currentPageFavorites.forEach(fav => {
+    const title = fav.recipe_title.length > 40
+      ? fav.recipe_title.substring(0, 40) + '...'
+      : fav.recipe_title;
+    buttons.push([
+      Markup.button.callback(title, `favorite_${fav.id}`),
+      Markup.button.callback("❌", `remove_favorite_${fav.id}`)
+    ]);
+  });
+
+  // Кнопки навигации
+  const navButtons = [];
+  if (currentPage > 0) {
+    navButtons.push(Markup.button.callback("◀️", `favorites_page_${currentPage - 1}`));
+  }
+  navButtons.push(Markup.button.callback(`${currentPage + 1} / ${Math.ceil(favorites.length / pageSize)}`, "favorites_info"));
+  if (endIndex < favorites.length) {
+    navButtons.push(Markup.button.callback("▶️", `favorites_page_${currentPage + 1}`));
+  }
+  if (navButtons.length > 0) {
+    buttons.push(navButtons);
+  }
+
+  // Кнопка возврата
+  buttons.push([Markup.button.callback("Вернуться на главную↩️", "back_to_main")]);
+
+  return Markup.inlineKeyboard(buttons);
+};
+
+// Клавиатура для просмотра рецепта из избранного
+export const getFavoriteRecipeKeyboard = (favoriteId) => {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("Ингредиенты🔎", `favorite_ingredients_${favoriteId}`)],
+    [Markup.button.callback("Пошаговый рецепт📖", `favorite_step_by_step_${favoriteId}`)],
+    [Markup.button.callback("❌ Удалить из избранного", `remove_favorite_${favoriteId}`)],
+    [Markup.button.callback("◀️ Вернуться к списку", "favorites_list")],
+    [
+      Markup.button.callback("Вернуться на главную↩️", "back_to_main"),
+      Markup.button.callback("Закрыть❌", "close_menu")
+    ]
+  ]);
 };
 
 /**

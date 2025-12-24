@@ -78,14 +78,19 @@ export const closePool = async () => {
 // Инициализация таблиц (вызывается один раз при старте)
 export const initTables = async () => {
   try {
+    console.log('🔄 Начало инициализации таблиц...');
+
     // Проверяем подключение
     const connected = await testConnection();
     if (!connected) {
+      console.error('❌ Не удалось подключиться к БД, таблицы не будут созданы');
       return false;
     }
 
+    console.log('🔄 Создание таблицы favorites...');
+
     // Создаем таблицу избранного (если не существует)
-    await query(`
+    const createTableResult = await query(`
       CREATE TABLE IF NOT EXISTS favorites (
         id SERIAL PRIMARY KEY,
         chat_id BIGINT NOT NULL,
@@ -99,8 +104,10 @@ export const initTables = async () => {
         UNIQUE(chat_id, recipe_url)
       )
     `);
+    console.log('✅ Команда CREATE TABLE выполнена');
 
     // Создаем индексы (если не существуют)
+    console.log('🔄 Создание индексов...');
     await query(`
       CREATE INDEX IF NOT EXISTS idx_favorites_chat_id
       ON favorites(chat_id)
@@ -112,9 +119,58 @@ export const initTables = async () => {
     `);
 
     console.log('✅ Таблицы БД инициализированы');
+
+    // Проверяем, что таблица действительно создана
+    const exists = await checkTableExists('favorites');
+    if (!exists) {
+      console.error('⚠️ ВНИМАНИЕ: Таблица favorites не была создана, несмотря на успешное выполнение команды');
+    }
+
     return true;
   } catch (error) {
     console.error('❌ Ошибка инициализации таблиц:', error);
+    console.error('❌ Детали ошибки:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint,
+      stack: error.stack
+    });
+    return false;
+  }
+};
+
+// Функция для проверки существования таблицы
+export const checkTableExists = async (tableName = 'favorites') => {
+  try {
+    const result = await query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables
+        WHERE table_schema = 'public'
+        AND table_name = $1
+      )
+    `, [tableName]);
+
+    const exists = result.rows[0].exists;
+    if (exists) {
+      console.log(`✅ Таблица "${tableName}" существует`);
+      // Получаем информацию о таблице
+      const tableInfo = await query(`
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = $1
+        ORDER BY ordinal_position
+      `, [tableName]);
+      console.log(`📋 Структура таблицы "${tableName}":`);
+      tableInfo.rows.forEach(col => {
+        console.log(`   - ${col.column_name}: ${col.data_type} (nullable: ${col.is_nullable})`);
+      });
+    } else {
+      console.log(`❌ Таблица "${tableName}" не существует`);
+    }
+    return exists;
+  } catch (error) {
+    console.error(`❌ Ошибка проверки таблицы "${tableName}":`, error);
     return false;
   }
 };

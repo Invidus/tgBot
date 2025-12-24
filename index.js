@@ -494,10 +494,12 @@ bot.action("previous_recipe", async (ctx) => {
     const hasHistory = hasRecipeHistory(chatId, dishType);
     const recipeRequested = isRecipeRequested(chatId, dishType);
 
+    // Проверяем, находится ли предыдущий рецепт в избранном
+    const keyboard = await getDetailedMenuKeyboardWithFavorites(chatId, previousRecipe.url, recipeRequested, hasHistory);
+
     try {
         // Используем сохраненный текст для быстрого отображения
         const recipeText = validateAndTruncateMessage(previousRecipe.text || 'Меню блюда');
-        const keyboard = getDetailedMenuKeyboard(recipeRequested, hasHistory);
 
         if (previousRecipe.hasPhoto && previousRecipe.photoFileId) {
             // Если был фото, пытаемся отредактировать медиа
@@ -594,28 +596,30 @@ bot.action("add_to_favorites", async (ctx) => {
 
         if (added) {
             await ctx.answerCbQuery("✅ Добавлено в избранное!");
-            // Обновляем клавиатуру
-            const recipeRequested = isRecipeRequested(chatId, dishType);
-            const hasHistory = hasRecipeHistory(chatId, dishType);
-            const keyboard = await getDetailedMenuKeyboardWithFavorites(chatId, hrefOnProduct, recipeRequested, hasHistory);
-
-            try {
-                if (hasPhoto && photoFileId) {
-                    await ctx.telegram.editMessageCaption(
-                        chatId,
-                        currentMessage.message_id,
-                        null,
-                        recipeText,
-                        keyboard
-                    );
-                } else {
-                    await ctx.editMessageText(recipeText, keyboard);
-                }
-            } catch (e) {
-                // Игнорируем ошибки редактирования
-            }
         } else {
-            await ctx.answerCbQuery("Рецепт уже в избранном");
+            // Рецепт уже в избранном, просто обновляем клавиатуру без уведомления
+            await ctx.answerCbQuery();
+        }
+
+        // Обновляем клавиатуру в любом случае (добавлен или уже был в избранном)
+        const recipeRequested = isRecipeRequested(chatId, dishType);
+        const hasHistory = hasRecipeHistory(chatId, dishType);
+        const keyboard = await getDetailedMenuKeyboardWithFavorites(chatId, hrefOnProduct, recipeRequested, hasHistory);
+
+        try {
+            if (hasPhoto && photoFileId) {
+                await ctx.telegram.editMessageCaption(
+                    chatId,
+                    currentMessage.message_id,
+                    null,
+                    recipeText,
+                    keyboard
+                );
+            } else {
+                await ctx.editMessageText(recipeText, keyboard);
+            }
+        } catch (e) {
+            // Игнорируем ошибки редактирования
         }
     } catch (error) {
         console.error('Ошибка добавления в избранное:', error);

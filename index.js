@@ -1683,6 +1683,7 @@ bot.action("back_to_main", async (ctx) => {
 bot.action("close_menu", async (ctx) => {
     const chatId = ctx.chat.id;
     try {
+        // Редактируем текущее сообщение вместо создания нового
         await ctx.editMessageText("Бот остановлен. Нажмите кнопку 'Запуск✅', чтобы начать работу", {
             reply_markup: {
                 inline_keyboard: [
@@ -1691,9 +1692,19 @@ bot.action("close_menu", async (ctx) => {
             }
         });
     } catch (error) {
+        // Если редактирование не удалось (например, сообщение уже удалено), отправляем новое
         if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
             // Сообщение уже такое же, это нормально
         } else {
+            // Пытаемся удалить предыдущие сообщения бота перед отправкой нового
+            try {
+                const messageId = ctx.callbackQuery?.message?.message_id;
+                if (messageId) {
+                    // Удаляем текущее сообщение
+                    await ctx.telegram.deleteMessage(chatId, messageId).catch(() => {});
+                }
+            } catch (e) {}
+
             await ctx.reply("Бот остановлен. Нажмите кнопку 'Запуск✅', чтобы начать работу", {
                 reply_markup: {
                     inline_keyboard: [
@@ -1708,8 +1719,18 @@ bot.action("close_menu", async (ctx) => {
 
 bot.action("start_bot", async (ctx) => {
     const chatId = ctx.chat.id;
-        resetUserState(chatId);
-        resetUserHrefs(chatId);
+    resetUserState(chatId);
+    resetUserHrefs(chatId);
+
+    // Удаляем сообщение "Бот остановлен" перед отправкой приветствия
+    try {
+        const messageId = ctx.callbackQuery?.message?.message_id;
+        if (messageId) {
+            await ctx.telegram.deleteMessage(chatId, messageId).catch(() => {});
+        }
+    } catch (e) {
+        // Игнорируем ошибки удаления
+    }
 
     // Удаляем reply keyboard через отдельное сообщение
     await ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️', {

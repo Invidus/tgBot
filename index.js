@@ -1683,7 +1683,7 @@ bot.action("back_to_main", async (ctx) => {
 bot.action("close_menu", async (ctx) => {
     const chatId = ctx.chat.id;
     try {
-        await ctx.editMessageText("Меню закрыто", {
+        await ctx.editMessageText("Бот остановлен. Нажмите кнопку 'Запуск✅', чтобы начать работу", {
             reply_markup: {
                 inline_keyboard: [
                     [{ text: "Запуск✅", callback_data: "start_bot" }]
@@ -1694,7 +1694,7 @@ bot.action("close_menu", async (ctx) => {
         if (error.response?.error_code === 400 && error.response?.description?.includes('message is not modified')) {
             // Сообщение уже такое же, это нормально
         } else {
-            await ctx.reply("Меню закрыто", {
+            await ctx.reply("Бот остановлен. Нажмите кнопку 'Запуск✅', чтобы начать работу", {
                 reply_markup: {
                     inline_keyboard: [
                         [{ text: "Запуск✅", callback_data: "start_bot" }]

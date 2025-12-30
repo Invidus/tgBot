@@ -14,7 +14,7 @@ export const showMenu = (bot, chatId) => {
 }
 
 export const closeMenu = (bot, chatId) => {
-  bot.telegram.sendMessage(chatId, "Меню закрыто", {
+  bot.telegram.sendMessage(chatId, "Бот остановлен. Нажмите кнопку 'Запуск✅', чтобы начать работу", {
     reply_markup: {
       remove_keyboard: true
     }

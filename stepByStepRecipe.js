@@ -5,6 +5,7 @@ import cheerio from "cheerio";
 // Кэш для пошаговых рецептов
 const stepByStepCache = new Map();
 const STEP_CACHE_TTL = 60 * 60 * 1000; // 1 час
+const MAX_STEP_CACHE_SIZE = 500; // Максимум 500 пошаговых рецептов в кэше
 
 /**
  * Получает пошаговый рецепт из кэша
@@ -24,6 +25,17 @@ const getCachedStepByStep = (url) => {
  * Сохраняет пошаговый рецепт в кэш
  */
 const cacheStepByStep = (url, data) => {
+  // Если кэш переполнен, удаляем самые старые записи
+  if (stepByStepCache.size >= MAX_STEP_CACHE_SIZE) {
+    const entries = Array.from(stepByStepCache.entries());
+    // Сортируем по времени и удаляем 10% самых старых
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+    const toDelete = Math.floor(MAX_STEP_CACHE_SIZE * 0.1);
+    for (let i = 0; i < toDelete; i++) {
+      stepByStepCache.delete(entries[i][0]);
+    }
+  }
+
   stepByStepCache.set(url, {
     data,
     timestamp: Date.now()

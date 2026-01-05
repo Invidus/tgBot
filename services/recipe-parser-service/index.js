@@ -313,10 +313,8 @@ app.post('/parse/search', async (req, res) => {
       return res.json(JSON.parse(cached));
     }
 
-    // Используем правильный URL и кодировку: кириллица кодируется, пробелы заменяются на +
-    // Сначала кодируем через encodeURIComponent (кодирует кириллицу и спецсимволы)
-    // Затем заменяем %20 (закодированные пробелы) на + как требует сайт
-    const searchStrEncoded = encodeURIComponent(trimmedQuery).replace(/%20/g, '+');
+    // Используем правильный URL: пробелы заменяются на +, кириллица передается как есть
+    const searchStrEncoded = trimmedQuery.replace(/\s+/g, '+');
     const searchUrl = `https://1000.menu/cooking/search?ms=1&str=${searchStrEncoded}`;
     console.log('🔍 Search URL:', searchUrl);
 

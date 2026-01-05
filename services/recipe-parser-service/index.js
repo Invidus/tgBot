@@ -1,7 +1,7 @@
 import express from 'express';
 import { chromium } from 'playwright';
 import axios from 'axios';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 import { config } from '../shared/config.js';
 import Redis from 'ioredis';
 

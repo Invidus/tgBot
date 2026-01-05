@@ -90,19 +90,28 @@ const parseWithAxios = async (url) => {
 
 // Парсинг завтрака
 app.post('/parse/breakfast', async (req, res) => {
-  const { chatId } = req.body;
+  const { chatId, forceRefresh } = req.body;
 
   try {
-    // Проверяем кэш
+    // Проверяем кэш только если не требуется принудительное обновление
     const cacheKey = `recipe:breakfast:${chatId}`;
-    let cached = null;
-    try {
-      cached = await redis.get(cacheKey);
-    } catch (redisError) {
-      console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
-    }
-    if (cached) {
-      return res.json(JSON.parse(cached));
+    if (!forceRefresh) {
+      let cached = null;
+      try {
+        cached = await redis.get(cacheKey);
+      } catch (redisError) {
+        console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
+      }
+      if (cached) {
+        return res.json(JSON.parse(cached));
+      }
+    } else {
+      // Удаляем старый кэш при принудительном обновлении
+      try {
+        await redis.del(cacheKey);
+      } catch (redisError) {
+        console.warn('⚠️ Ошибка удаления кэша:', redisError.message);
+      }
     }
 
     // Получаем случайный рецепт
@@ -149,18 +158,26 @@ app.post('/parse/breakfast', async (req, res) => {
 
 // Парсинг обеда
 app.post('/parse/dinner', async (req, res) => {
-  const { chatId } = req.body;
+  const { chatId, forceRefresh } = req.body;
 
   try {
     const cacheKey = `recipe:dinner:${chatId}`;
-    let cached = null;
-    try {
-      cached = await redis.get(cacheKey);
-    } catch (redisError) {
-      console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
-    }
-    if (cached) {
-      return res.json(JSON.parse(cached));
+    if (!forceRefresh) {
+      let cached = null;
+      try {
+        cached = await redis.get(cacheKey);
+      } catch (redisError) {
+        console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
+      }
+      if (cached) {
+        return res.json(JSON.parse(cached));
+      }
+    } else {
+      try {
+        await redis.del(cacheKey);
+      } catch (redisError) {
+        console.warn('⚠️ Ошибка удаления кэша:', redisError.message);
+      }
     }
 
     const pageNum = Math.floor(Math.random() * 23) + 1;
@@ -204,18 +221,26 @@ app.post('/parse/dinner', async (req, res) => {
 
 // Парсинг ужина
 app.post('/parse/lunch', async (req, res) => {
-  const { chatId } = req.body;
+  const { chatId, forceRefresh } = req.body;
 
   try {
     const cacheKey = `recipe:lunch:${chatId}`;
-    let cached = null;
-    try {
-      cached = await redis.get(cacheKey);
-    } catch (redisError) {
-      console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
-    }
-    if (cached) {
-      return res.json(JSON.parse(cached));
+    if (!forceRefresh) {
+      let cached = null;
+      try {
+        cached = await redis.get(cacheKey);
+      } catch (redisError) {
+        console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
+      }
+      if (cached) {
+        return res.json(JSON.parse(cached));
+      }
+    } else {
+      try {
+        await redis.del(cacheKey);
+      } catch (redisError) {
+        console.warn('⚠️ Ошибка удаления кэша:', redisError.message);
+      }
     }
 
     const pageNum = Math.floor(Math.random() * 23) + 1;

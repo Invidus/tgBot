@@ -47,11 +47,12 @@ const setRecipeRequested = async (chatId, dishType, value) => {
 };
 
 // Функция для получения рецепта через Recipe Parser Service
-const getRecipeFromParser = async (dishType, chatId, searchQuery = null) => {
+const getRecipeFromParser = async (dishType, chatId, searchQuery = null, forceRefresh = false) => {
   try {
     const response = await axios.post(`${recipeParserUrl}/parse/${dishType}`, {
       chatId,
-      searchQuery
+      searchQuery,
+      forceRefresh
     }, {
       timeout: 30000,
       headers: { 'Content-Type': 'application/json' }
@@ -213,10 +214,26 @@ bot.action("breakfast", async (ctx) => {
         { reply_markup: keyboard.reply_markup }
       );
     } else {
-      await ctx.editMessageText(recipeText, keyboard);
+      await ctx.telegram.editMessageText(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        recipeText,
+        keyboard
+      );
     }
   } catch (error) {
-    await ctx.editMessageText("❌ Ошибка при получении рецепта. Попробуйте позже.");
+    console.error('Ошибка в breakfast:', error);
+    try {
+      await ctx.telegram.editMessageText(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        "❌ Ошибка при получении рецепта. Попробуйте позже."
+      );
+    } catch (e) {
+      await ctx.reply("❌ Ошибка при получении рецепта. Попробуйте позже.");
+    }
   }
 });
 
@@ -250,10 +267,26 @@ bot.action("dinner", async (ctx) => {
         { reply_markup: keyboard.reply_markup }
       );
     } else {
-      await ctx.editMessageText(recipeText, keyboard);
+      await ctx.telegram.editMessageText(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        recipeText,
+        keyboard
+      );
     }
   } catch (error) {
-    await ctx.editMessageText("❌ Ошибка при получении рецепта. Попробуйте позже.");
+    console.error('Ошибка в dinner:', error);
+    try {
+      await ctx.telegram.editMessageText(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        "❌ Ошибка при получении рецепта. Попробуйте позже."
+      );
+    } catch (e) {
+      await ctx.reply("❌ Ошибка при получении рецепта. Попробуйте позже.");
+    }
   }
 });
 
@@ -287,10 +320,26 @@ bot.action("lunch", async (ctx) => {
         { reply_markup: keyboard.reply_markup }
       );
     } else {
-      await ctx.editMessageText(recipeText, keyboard);
+      await ctx.telegram.editMessageText(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        recipeText,
+        keyboard
+      );
     }
   } catch (error) {
-    await ctx.editMessageText("❌ Ошибка при получении рецепта. Попробуйте позже.");
+    console.error('Ошибка в lunch:', error);
+    try {
+      await ctx.telegram.editMessageText(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        "❌ Ошибка при получении рецепта. Попробуйте позже."
+      );
+    } catch (e) {
+      await ctx.reply("❌ Ошибка при получении рецепта. Попробуйте позже.");
+    }
   }
 });
 
@@ -350,10 +399,26 @@ bot.action("ingredients", async (ctx) => {
         { reply_markup: keyboard.reply_markup }
       );
     } else {
-      await ctx.editMessageText(recipeText, keyboard);
+      await ctx.telegram.editMessageText(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        recipeText,
+        keyboard
+      );
     }
   } catch (error) {
-    await ctx.editMessageText("❌ Ошибка при загрузке рецепта");
+    console.error('Ошибка в ingredients:', error);
+    try {
+      await ctx.telegram.editMessageText(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        "❌ Ошибка при загрузке рецепта"
+      );
+    } catch (e) {
+      await ctx.reply("❌ Ошибка при загрузке рецепта");
+    }
   }
 });
 
@@ -417,7 +482,13 @@ bot.action("add_to_favorites", async (ctx) => {
         keyboard
       );
     } else {
-      await ctx.editMessageText(recipeText, keyboard);
+      await ctx.telegram.editMessageText(
+        chatId,
+        currentMessage.message_id,
+        null,
+        recipeText,
+        keyboard
+      );
     }
   } catch (e) {
     // Игнорируем ошибки редактирования
@@ -474,7 +545,13 @@ bot.action("remove_from_favorites", async (ctx) => {
         keyboard
       );
     } else {
-      await ctx.editMessageText(recipeText, keyboard);
+      await ctx.telegram.editMessageText(
+        chatId,
+        currentMessage.message_id,
+        null,
+        recipeText,
+        keyboard
+      );
     }
   } catch (e) {
     // Игнорируем ошибки редактирования
@@ -509,7 +586,12 @@ bot.action("another_dish", async (ctx) => {
   try {
     if (currentMessage) {
       // Редактируем существующее сообщение
-      await ctx.editMessageText("🔍 Ищу рецепт...");
+      await ctx.telegram.editMessageText(
+        chatId,
+        currentMessage.message_id,
+        null,
+        "🔍 Ищу рецепт..."
+      );
       loadingMsg = currentMessage;
     } else {
       // Отправляем новое сообщение
@@ -521,7 +603,8 @@ bot.action("another_dish", async (ctx) => {
   }
 
   try {
-    const result = await getRecipeFromParser(dishType, chatId);
+    // При нажатии "Другое блюдо" принудительно обновляем рецепт
+    const result = await getRecipeFromParser(dishType, chatId, null, true);
     await setUserHref(chatId, dishType, result.url);
 
     const recipeText = validateAndTruncateMessage(result.recipeText);
@@ -616,10 +699,26 @@ bot.action("step_by_step", async (ctx) => {
         { reply_markup: keyboard.reply_markup }
       );
     } else {
-      await ctx.editMessageText(recipeText, keyboard);
+      await ctx.telegram.editMessageText(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        recipeText,
+        keyboard
+      );
     }
   } catch (error) {
-    await ctx.editMessageText("❌ Ошибка при загрузке рецепта");
+    console.error('Ошибка в ingredients:', error);
+    try {
+      await ctx.telegram.editMessageText(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        "❌ Ошибка при загрузке рецепта"
+      );
+    } catch (e) {
+      await ctx.reply("❌ Ошибка при загрузке рецепта");
+    }
   }
 });
 
@@ -766,10 +865,26 @@ bot.on("message", async (ctx) => {
             { reply_markup: keyboard.reply_markup }
           );
         } else {
-          await ctx.editMessageText(recipeText, keyboard);
+          await ctx.telegram.editMessageText(
+            chatId,
+            loadingMsg.message_id,
+            null,
+            recipeText,
+            keyboard
+          );
         }
       } catch (error) {
-        await ctx.editMessageText("❌ Ошибка при поиске рецепта. Попробуйте позже.");
+        console.error('Ошибка в поиске:', error);
+        try {
+          await ctx.telegram.editMessageText(
+            chatId,
+            loadingMsg.message_id,
+            null,
+            "❌ Ошибка при поиске рецепта. Попробуйте позже."
+          );
+        } catch (e) {
+          await ctx.reply("❌ Ошибка при поиске рецепта. Попробуйте позже.");
+        }
       }
     }
   }

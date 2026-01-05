@@ -502,7 +502,23 @@ bot.action("another_dish", async (ctx) => {
   // Сбрасываем флаг запрошенного рецепта
   await setRecipeRequested(chatId, dishType, false);
 
-  const loadingMsg = await ctx.reply("🔍 Ищу рецепт...");
+  // Пытаемся удалить старое сообщение, если оно есть
+  const currentMessage = ctx.callbackQuery?.message;
+  let loadingMsg = null;
+
+  try {
+    if (currentMessage) {
+      // Редактируем существующее сообщение
+      await ctx.editMessageText("🔍 Ищу рецепт...");
+      loadingMsg = currentMessage;
+    } else {
+      // Отправляем новое сообщение
+      loadingMsg = await ctx.reply("🔍 Ищу рецепт...");
+    }
+  } catch (e) {
+    // Если не удалось отредактировать, отправляем новое
+    loadingMsg = await ctx.reply("🔍 Ищу рецепт...");
+  }
 
   try {
     const result = await getRecipeFromParser(dishType, chatId);
@@ -525,10 +541,26 @@ bot.action("another_dish", async (ctx) => {
         { reply_markup: keyboard.reply_markup }
       );
     } else {
-      await ctx.editMessageText(recipeText, keyboard);
+      await ctx.telegram.editMessageText(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        recipeText,
+        keyboard
+      );
     }
   } catch (error) {
-    await ctx.editMessageText("❌ Ошибка при получении рецепта. Попробуйте позже.");
+    console.error('Ошибка в another_dish:', error);
+    try {
+      await ctx.telegram.editMessageText(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        "❌ Ошибка при получении рецепта. Попробуйте позже."
+      );
+    } catch (e) {
+      await ctx.reply("❌ Ошибка при получении рецепта. Попробуйте позже.");
+    }
   }
 });
 

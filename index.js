@@ -5,7 +5,7 @@ import { getBreakFast, getFullRecepie } from "./breakfast.js";
 import { getDinner, getFullRecepieDinner } from "./dinner.js";
 import { getLunch, getFullRecepieLunch } from "./lunch.js";
 import { search, getFullRecepieSearch } from "./search.js";
-import { initBrowser, closeBrowser } from "./browserManager.js";
+import { initBrowserPool, closeBrowser, getPoolStats } from "./browserManager.js";
 import { checkRateLimit } from "./rateLimiter.js";
 import { getStepByStepRecipe } from "./stepByStepRecipe.js";
 import { validateAndTruncateMessage } from "./messageUtils.js";
@@ -1815,10 +1815,10 @@ bot.on("message", async ctx => {
     // Обрабатывать только текстовые сообщения, не связанные с кнопками
     // Кнопки теперь обрабатываются через bot.action()
 });
-// Инициализируем браузер при старте бота (не критично, если не получится)
-initBrowser()
+// Инициализируем пул браузеров при старте бота (не критично, если не получится)
+initBrowserPool()
   .then(() => {
-    console.log('✅ Браузер Playwright готов');
+    console.log('✅ Пул браузеров Playwright готов');
     // Инициализируем БД
     return initTables();
   })
@@ -1841,6 +1841,17 @@ initBrowser()
 bot.launch()
   .then(() => {
     console.log('✅ Бот успешно запущен!');
+
+    // Логирование статистики пула браузеров каждые 5 минут
+    setInterval(() => {
+      const stats = getPoolStats();
+      console.log('📊 Статистика пула браузеров:', {
+        браузеров: stats.browsers,
+        живых: stats.aliveBrowsers,
+        активных_страниц: `${stats.activePages}/${stats.maxConcurrentPages}`,
+        очередь: `${stats.queueSize}/${stats.maxQueueSize}`
+      });
+    }, 5 * 60 * 1000);
   })
   .catch((err) => {
     console.error('❌ Ошибка при запуске бота:', err);

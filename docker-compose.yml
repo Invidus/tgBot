@@ -24,7 +24,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5433:5432"  # Изменен внешний порт на 5433, чтобы избежать конфликта с системным PostgreSQL
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-tgbot_user}"]
@@ -76,8 +76,8 @@ services:
       context: .
       dockerfile: services/database-service/Dockerfile
     environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
+      DB_HOST: postgres  # Используем контейнер PostgreSQL
+      DB_PORT: 5432  # Внутренний порт контейнера (внешний 5433)
       DB_NAME: ${DB_NAME:-tgbot_db}
       DB_USER: ${DB_USER:-tgbot_user}
       DB_PASSWORD: ${DB_PASSWORD}

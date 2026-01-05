@@ -103,11 +103,17 @@ const getFavoritesFromDB = async (chatId, page = 0, pageSize = 50) => {
 const getFavoritesCount = async (chatId) => {
   try {
     const response = await axios.get(`${databaseServiceUrl}/favorites/count/${chatId}`, {
-      timeout: 10000
+      timeout: 10000,
+      validateStatus: (status) => status < 500 // Не бросать ошибку для 4xx
     });
-    return response.data.count || 0;
+    if (response.status === 200) {
+      return response.data.count || 0;
+    }
+    return 0;
   } catch (error) {
-    console.error('Ошибка получения количества избранного:', error.message);
+    if (error.response && error.response.status >= 500) {
+      console.error('Ошибка получения количества избранного (500):', error.message);
+    }
     return 0;
   }
 };

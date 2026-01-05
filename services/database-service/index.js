@@ -21,6 +21,42 @@ pool.on('error', (err) => {
   console.error('❌ Неожиданная ошибка на неактивном клиенте PostgreSQL', err);
 });
 
+// Инициализация таблицы favorites
+const initTables = async () => {
+  try {
+    console.log('🔄 Создание таблицы favorites...');
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS favorites (
+        id SERIAL PRIMARY KEY,
+        chat_id BIGINT NOT NULL,
+        recipe_url TEXT NOT NULL,
+        recipe_title TEXT NOT NULL,
+        recipe_text TEXT,
+        dish_type VARCHAR(20),
+        has_photo BOOLEAN DEFAULT FALSE,
+        photo_file_id TEXT,
+        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(chat_id, recipe_url)
+      )
+    `);
+    console.log('✅ Таблица favorites создана или уже существует');
+
+    // Создаем индексы
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_favorites_chat_id
+      ON favorites(chat_id)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_favorites_added_at
+      ON favorites(added_at DESC)
+    `);
+    console.log('✅ Индексы созданы');
+  } catch (error) {
+    console.error('❌ Ошибка инициализации таблиц:', error);
+    throw error;
+  }
+};
+
 // Получение количества избранного
 app.get('/favorites/count/:chatId', async (req, res) => {
   try {
@@ -155,9 +191,20 @@ app.get('/health', async (req, res) => {
 
 const PORT = process.env.PORT || 3002;
 
-app.listen(PORT, () => {
-  console.log(`✅ Database Service запущен на порту ${PORT}`);
-});
+// Инициализация и запуск
+initTables()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`✅ Database Service запущен на порту ${PORT}`);
+    });
+  })
+  .catch((error) => {
+    console.error('❌ Ошибка инициализации Database Service:', error);
+    // Запускаем сервис в любом случае, но таблица может не работать
+    app.listen(PORT, () => {
+      console.log(`⚠️ Database Service запущен на порту ${PORT} (таблицы не инициализированы)`);
+    });
+  });
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {

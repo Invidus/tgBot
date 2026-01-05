@@ -52,10 +52,16 @@ const getRecipeFromParser = async (dishType, chatId, searchQuery = null) => {
     const response = await axios.post(`${recipeParserUrl}/parse/${dishType}`, {
       chatId,
       searchQuery
-    }, { timeout: 30000 });
+    }, {
+      timeout: 30000,
+      headers: { 'Content-Type': 'application/json' }
+    });
     return response.data;
   } catch (error) {
     console.error(`Ошибка получения рецепта ${dishType}:`, error.message);
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      throw new Error('Сервис парсинга недоступен. Попробуйте позже.');
+    }
     throw error;
   }
 };
@@ -66,10 +72,16 @@ const getFullRecipe = async (url, dishType) => {
     const response = await axios.post(`${recipeParserUrl}/parse/full`, {
       url,
       dishType
-    }, { timeout: 30000 });
+    }, {
+      timeout: 30000,
+      headers: { 'Content-Type': 'application/json' }
+    });
     return response.data;
   } catch (error) {
     console.error('Ошибка получения полного рецепта:', error.message);
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      throw new Error('Сервис парсинга недоступен. Попробуйте позже.');
+    }
     throw error;
   }
 };
@@ -78,7 +90,8 @@ const getFullRecipe = async (url, dishType) => {
 const getFavoritesFromDB = async (chatId, page = 0, pageSize = 50) => {
   try {
     const response = await axios.get(`${databaseServiceUrl}/favorites/${chatId}`, {
-      params: { page, pageSize }
+      params: { page, pageSize },
+      timeout: 10000
     });
     return response.data;
   } catch (error) {
@@ -89,7 +102,9 @@ const getFavoritesFromDB = async (chatId, page = 0, pageSize = 50) => {
 
 const getFavoritesCount = async (chatId) => {
   try {
-    const response = await axios.get(`${databaseServiceUrl}/favorites/count/${chatId}`);
+    const response = await axios.get(`${databaseServiceUrl}/favorites/count/${chatId}`, {
+      timeout: 10000
+    });
     return response.data.count || 0;
   } catch (error) {
     console.error('Ошибка получения количества избранного:', error.message);
@@ -100,7 +115,8 @@ const getFavoritesCount = async (chatId) => {
 const isInFavorites = async (chatId, url) => {
   try {
     const response = await axios.get(`${databaseServiceUrl}/favorites/check/${chatId}`, {
-      params: { url }
+      params: { url },
+      timeout: 10000
     });
     return response.data.isInFavorites || false;
   } catch (error) {
@@ -110,7 +126,10 @@ const isInFavorites = async (chatId, url) => {
 
 const addToFavorites = async (chatId, data) => {
   try {
-    const response = await axios.post(`${databaseServiceUrl}/favorites/add`, data);
+    const response = await axios.post(`${databaseServiceUrl}/favorites/add`, data, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    });
     return response.data.added || false;
   } catch (error) {
     console.error('Ошибка добавления в избранное:', error.message);
@@ -121,7 +140,8 @@ const addToFavorites = async (chatId, data) => {
 const removeFromFavorites = async (chatId, url) => {
   try {
     const response = await axios.delete(`${databaseServiceUrl}/favorites/${chatId}`, {
-      params: { url }
+      params: { url },
+      timeout: 10000
     });
     return response.data.removed || false;
   } catch (error) {
@@ -159,6 +179,8 @@ bot.start(async (ctx) => {
 
 // Обработчик выбора завтрака
 bot.action("breakfast", async (ctx) => {
+  await ctx.answerCbQuery(); // Сразу убираем загрузку
+
   const chatId = ctx.chat.id;
   await setUserState(chatId, 1);
 
@@ -190,12 +212,12 @@ bot.action("breakfast", async (ctx) => {
   } catch (error) {
     await ctx.editMessageText("❌ Ошибка при получении рецепта. Попробуйте позже.");
   }
-
-  await ctx.answerCbQuery();
 });
 
 // Обработчик выбора обеда
 bot.action("dinner", async (ctx) => {
+  await ctx.answerCbQuery(); // Сразу убираем загрузку
+
   const chatId = ctx.chat.id;
   await setUserState(chatId, 2);
 
@@ -227,12 +249,12 @@ bot.action("dinner", async (ctx) => {
   } catch (error) {
     await ctx.editMessageText("❌ Ошибка при получении рецепта. Попробуйте позже.");
   }
-
-  await ctx.answerCbQuery();
 });
 
 // Обработчик выбора ужина
 bot.action("lunch", async (ctx) => {
+  await ctx.answerCbQuery(); // Сразу убираем загрузку
+
   const chatId = ctx.chat.id;
   await setUserState(chatId, 3);
 
@@ -264,8 +286,6 @@ bot.action("lunch", async (ctx) => {
   } catch (error) {
     await ctx.editMessageText("❌ Ошибка при получении рецепта. Попробуйте позже.");
   }
-
-  await ctx.answerCbQuery();
 });
 
 // Обработчик поиска
@@ -279,6 +299,8 @@ bot.action("search", async (ctx) => {
 
 // Обработчик получения полного рецепта
 bot.action("ingredients", async (ctx) => {
+  await ctx.answerCbQuery(); // Сразу убираем загрузку
+
   const chatId = ctx.chat.id;
   const state = await getUserState(chatId);
 
@@ -327,12 +349,12 @@ bot.action("ingredients", async (ctx) => {
   } catch (error) {
     await ctx.editMessageText("❌ Ошибка при загрузке рецепта");
   }
-
-  await ctx.answerCbQuery();
 });
 
 // Обработчик добавления в избранное
 bot.action("add_to_favorites", async (ctx) => {
+  await ctx.answerCbQuery(); // Сразу убираем загрузку
+
   const chatId = ctx.chat.id;
   const state = await getUserState(chatId);
 
@@ -371,7 +393,8 @@ bot.action("add_to_favorites", async (ctx) => {
   });
 
   if (added) {
-    await ctx.answerCbQuery("✅ Добавлено в избранное!");
+    // Уведомление через отдельное сообщение, так как answerCbQuery уже вызван
+    await ctx.reply("✅ Добавлено в избранное!").catch(() => {});
   }
 
   const recipeRequested = await getRecipeRequested(chatId, dishType);
@@ -395,8 +418,177 @@ bot.action("add_to_favorites", async (ctx) => {
   }
 });
 
+// Обработчик удаления из избранного
+bot.action("remove_from_favorites", async (ctx) => {
+  await ctx.answerCbQuery(); // Сразу убираем загрузку
+
+  const chatId = ctx.chat.id;
+  const state = await getUserState(chatId);
+
+  let dishType = '';
+  let url = null;
+  if (state === 1) {
+    dishType = 'breakfast';
+    url = await getUserHref(chatId, 'breakfast');
+  } else if (state === 2) {
+    dishType = 'dinner';
+    url = await getUserHref(chatId, 'dinner');
+  } else if (state === 3) {
+    dishType = 'lunch';
+    url = await getUserHref(chatId, 'lunch');
+  } else if (state === 4) {
+    dishType = 'search';
+    url = await getUserHref(chatId, 'search');
+  }
+
+  if (!url) {
+    await ctx.answerCbQuery("Сначала выберите блюдо");
+    return;
+  }
+
+  const removed = await removeFromFavorites(chatId, url);
+
+  if (removed) {
+    await ctx.reply("❌ Удалено из избранного!").catch(() => {});
+  }
+
+  const currentMessage = ctx.callbackQuery?.message;
+  const recipeText = currentMessage?.text || currentMessage?.caption || '';
+  const recipeRequested = await getRecipeRequested(chatId, dishType);
+  const isInFav = await isInFavorites(chatId, url);
+  const keyboard = getDetailedMenuKeyboard(recipeRequested, false, isInFav);
+
+  try {
+    if (currentMessage?.photo) {
+      await ctx.telegram.editMessageCaption(
+        chatId,
+        currentMessage.message_id,
+        null,
+        recipeText,
+        keyboard
+      );
+    } else {
+      await ctx.editMessageText(recipeText, keyboard);
+    }
+  } catch (e) {
+    // Игнорируем ошибки редактирования
+  }
+});
+
+// Обработчик "Другое блюдо"
+bot.action("another_dish", async (ctx) => {
+  await ctx.answerCbQuery(); // Сразу убираем загрузку
+
+  const chatId = ctx.chat.id;
+  const state = await getUserState(chatId);
+
+  let dishType = '';
+  if (state === 1) dishType = 'breakfast';
+  else if (state === 2) dishType = 'dinner';
+  else if (state === 3) dishType = 'lunch';
+  else if (state === 4) dishType = 'search';
+
+  if (!dishType) {
+    await ctx.answerCbQuery("Сначала выберите тип блюда");
+    return;
+  }
+
+  // Сбрасываем флаг запрошенного рецепта
+  await setRecipeRequested(chatId, dishType, false);
+
+  const loadingMsg = await ctx.reply("🔍 Ищу рецепт...");
+
+  try {
+    const result = await getRecipeFromParser(dishType, chatId);
+    await setUserHref(chatId, dishType, result.url);
+
+    const recipeText = validateAndTruncateMessage(result.recipeText);
+    const isInFav = await isInFavorites(chatId, result.url);
+    const keyboard = getDetailedMenuKeyboard(false, false, isInFav);
+
+    if (result.hasPhoto && result.photoFileId) {
+      await ctx.telegram.editMessageMedia(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        {
+          type: 'photo',
+          media: result.photoFileId,
+          caption: recipeText
+        },
+        { reply_markup: keyboard.reply_markup }
+      );
+    } else {
+      await ctx.editMessageText(recipeText, keyboard);
+    }
+  } catch (error) {
+    await ctx.editMessageText("❌ Ошибка при получении рецепта. Попробуйте позже.");
+  }
+});
+
+// Обработчик возврата к предыдущему рецепту (пока упрощенный)
+bot.action("previous_recipe", async (ctx) => {
+  await ctx.answerCbQuery("Функция временно недоступна");
+});
+
+// Обработчик пошагового рецепта
+bot.action("step_by_step", async (ctx) => {
+  await ctx.answerCbQuery(); // Сразу убираем загрузку
+
+  const chatId = ctx.chat.id;
+  const state = await getUserState(chatId);
+
+  let dishType = '';
+  if (state === 1) dishType = 'breakfast';
+  else if (state === 2) dishType = 'dinner';
+  else if (state === 3) dishType = 'lunch';
+  else if (state === 4) dishType = 'search';
+
+  if (!dishType) {
+    await ctx.answerCbQuery("Сначала выберите тип блюда");
+    return;
+  }
+
+  const url = await getUserHref(chatId, dishType);
+  if (!url) {
+    await ctx.answerCbQuery("Сначала выберите блюдо");
+    return;
+  }
+
+  const loadingMsg = await ctx.reply("⏳ Загружаю пошаговый рецепт...");
+
+  try {
+    const result = await getFullRecipe(url, dishType);
+    await setRecipeRequested(chatId, dishType, true);
+
+    const recipeText = validateAndTruncateMessage(result.recipeText);
+    const isInFav = await isInFavorites(chatId, url);
+    const keyboard = getDetailedMenuKeyboard(true, false, isInFav);
+
+    if (result.hasPhoto && result.photoFileId) {
+      await ctx.telegram.editMessageMedia(
+        chatId,
+        loadingMsg.message_id,
+        null,
+        {
+          type: 'photo',
+          media: result.photoFileId,
+          caption: recipeText
+        },
+        { reply_markup: keyboard.reply_markup }
+      );
+    } else {
+      await ctx.editMessageText(recipeText, keyboard);
+    }
+  } catch (error) {
+    await ctx.editMessageText("❌ Ошибка при загрузке рецепта");
+  }
+});
+
 // Обработчик списка избранного
 bot.action("favorites_list", async (ctx) => {
+  await ctx.answerCbQuery(); // Сразу убираем загрузку
+
   const chatId = ctx.chat.id;
   const favorites = await getFavoritesFromDB(chatId, 0, 50);
 
@@ -408,7 +600,6 @@ bot.action("favorites_list", async (ctx) => {
         ]
       }
     });
-    await ctx.answerCbQuery();
     return;
   }
 
@@ -423,11 +614,12 @@ bot.action("favorites_list", async (ctx) => {
   }
 
   await ctx.reply(validateAndTruncateMessage(message), keyboard);
-  await ctx.answerCbQuery();
 });
 
 // Обработчик возврата на главную
 bot.action("back_to_main", async (ctx) => {
+  await ctx.answerCbQuery(); // Сразу убираем загрузку
+
   const chatId = ctx.chat.id;
   await setUserState(chatId, 0);
 
@@ -445,7 +637,6 @@ bot.action("back_to_main", async (ctx) => {
       ]
     }
   });
-  await ctx.answerCbQuery();
 });
 
 // Обработчик закрытия меню

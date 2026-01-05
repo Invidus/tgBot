@@ -178,13 +178,19 @@ const isInFavorites = async (chatId, url) => {
 
 const addToFavorites = async (chatId, data) => {
   try {
-    const response = await axios.post(`${databaseServiceUrl}/favorites/add`, data, {
+    const response = await axios.post(`${databaseServiceUrl}/favorites/add`, {
+      chatId,
+      ...data
+    }, {
       timeout: 10000,
       headers: { 'Content-Type': 'application/json' }
     });
     return response.data.added || false;
   } catch (error) {
     console.error('Ошибка добавления в избранное:', error.message);
+    if (error.response) {
+      console.error('Детали ошибки:', error.response.data);
+    }
     return false;
   }
 };
@@ -549,21 +555,35 @@ bot.action("add_to_favorites", async (ctx) => {
   }
 
   const currentMessage = ctx.callbackQuery?.message;
+  if (!currentMessage) {
+    await ctx.answerCbQuery("❌ Ошибка: сообщение не найдено");
+    return;
+  }
+
   const recipeText = currentMessage?.text || currentMessage?.caption || '';
   const recipeTitle = recipeText.split('\n')[0] || 'Рецепт без названия';
 
-  const added = await addToFavorites(chatId, {
-    url,
-    title: recipeTitle,
-    text: recipeText,
-    dishType,
-    hasPhoto: !!(currentMessage?.photo && currentMessage?.photo.length > 0),
-    photoFileId: currentMessage?.photo?.[currentMessage.photo.length - 1]?.file_id || null
-  });
+  try {
+    const added = await addToFavorites(chatId, {
+      url,
+      title: recipeTitle,
+      text: recipeText,
+      dishType,
+      hasPhoto: !!(currentMessage?.photo && currentMessage?.photo.length > 0),
+      photoFileId: currentMessage?.photo?.[currentMessage.photo.length - 1]?.file_id || null
+    });
 
-  if (added) {
-    // Уведомление через отдельное сообщение, так как answerCbQuery уже вызван
-    await ctx.reply("✅ Добавлено в избранное!").catch(() => {});
+    if (added) {
+      // Уведомление через отдельное сообщение
+      await ctx.reply("✅ Добавлено в избранное!").catch(() => {});
+    } else {
+      // Рецепт уже в избранном
+      await ctx.answerCbQuery("Рецепт уже в избранном");
+    }
+  } catch (error) {
+    console.error('Ошибка при добавлении в избранное:', error);
+    await ctx.answerCbQuery("❌ Ошибка при добавлении в избранное");
+    return;
   }
 
   const recipeRequested = await getRecipeRequested(chatId, dishType);

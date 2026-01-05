@@ -160,6 +160,44 @@ app.delete('/favorites/:chatId', async (req, res) => {
   }
 });
 
+// Удаление из избранного по ID (новый endpoint)
+app.delete('/favorites/:chatId/:id', async (req, res) => {
+  const { chatId, id } = req.params;
+
+  try {
+    const result = await pool.query(
+      'DELETE FROM favorites WHERE id = $1 AND chat_id = $2',
+      [id, chatId]
+    );
+
+    res.json({ removed: result.rowCount > 0 });
+  } catch (error) {
+    console.error('Ошибка удаления из избранного:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Получение рецепта из избранного по ID и chatId
+app.get('/favorites/:chatId/:id', async (req, res) => {
+  const { chatId, id } = req.params;
+
+  try {
+    const result = await pool.query(
+      'SELECT * FROM favorites WHERE id = $1 AND chat_id = $2',
+      [id, chatId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Рецепт не найден' });
+    }
+
+    res.json({ favorite: result.rows[0] });
+  } catch (error) {
+    console.error('Ошибка получения рецепта:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
 // Получение рецепта по ID
 app.get('/favorites/item/:id', async (req, res) => {
   try {

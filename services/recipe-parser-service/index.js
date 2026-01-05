@@ -78,11 +78,17 @@ const getAvailableBrowser = () => {
 };
 
 // Парсинг через axios (быстрый метод)
-const parseWithAxios = async (url) => {
+const parseWithAxios = async (url, isSearch = false) => {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+  };
+
+  if (isSearch) {
+    headers['Content-Type'] = 'application/json';
+  }
+
   const response = await axios.get(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    },
+    headers,
     timeout: 10000
   });
   return cheerio.load(response.data);
@@ -291,7 +297,12 @@ app.post('/parse/search', async (req, res) => {
       return res.status(400).json({ error: 'Неверный поисковый запрос' });
     }
 
-    const cacheKey = `recipe:search:${chatId}:${searchQuery}`;
+    const trimmedQuery = searchQuery.trim();
+    if (trimmedQuery.length === 0) {
+      return res.status(400).json({ error: 'Поисковый запрос не может быть пустым' });
+    }
+
+    const cacheKey = `recipe:search:${chatId}:${trimmedQuery}`;
     let cached = null;
     try {
       cached = await redis.get(cacheKey);
@@ -302,13 +313,20 @@ app.post('/parse/search', async (req, res) => {
       return res.json(JSON.parse(cached));
     }
 
-    const searchUrl = `https://1000.menu/search/?q=${encodeURIComponent(searchQuery)}`;
-    const $ = await parseWithAxios(searchUrl);
+    // Используем правильный URL и кодировку: кириллица кодируется, пробелы заменяются на +
+    // Сначала кодируем через encodeURIComponent (кодирует кириллицу и спецсимволы)
+    // Затем заменяем %20 (закодированные пробелы) на + как требует сайт
+    const searchStrEncoded = encodeURIComponent(trimmedQuery).replace(/%20/g, '+');
+    const searchUrl = `https://1000.menu/cooking/search?ms=1&str=${searchStrEncoded}`;
+    console.log('🔍 Search URL:', searchUrl);
 
-    const cards = $("section#cooking > .cooking-block > .cn-item:not(.ads_enabled)");
+    const $ = await parseWithAxios(searchUrl, true);
+
+    // Используем правильный селектор как в оригинальном search.js
+    const cards = $(".cooking-block > .cn-item:not(.ads_enabled)");
 
     if (cards.length === 0) {
-      return res.status(404).json({ error: 'Рецепты не найдены' });
+      return res.status(404).json({ error: `По запросу "${trimmedQuery}" ничего не найдено. Попробуйте другой запрос.` });
     }
 
     const randomCard = Math.floor(Math.random() * cards.length);
@@ -320,7 +338,14 @@ app.post('/parse/search', async (req, res) => {
     const time = card.find(".info-preview .level-right > span").text();
     const ccal = card.find(".info-preview .level-left > span").text();
 
-    const recipeText = `${title}\nОписание: ${description}\n\nВремя: ${time}\nКалорийность: ${ccal}\nСсылка: ${href}`;
+    // Проверяем, что данные валидны
+    if (!title || title.trim() === '') {
+      // Если данные пустые, возвращаем ошибку
+      return res.status(404).json({ error: `К сожалению, не удалось найти подходящее блюдо по запросу "${trimmedQuery}". Попробуйте другой запрос.` });
+    }
+
+    // Форматируем текст как в оригинале
+    const recipeText = `${title}\nОписание: ${description}\n\nВремя приготовления блюда: ${time}\nКалорийность блюда на 100 г: ${ccal}\nСсылка на рецепт: ${href}`;
 
     const result = {
       url: href,

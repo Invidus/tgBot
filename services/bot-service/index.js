@@ -132,6 +132,15 @@ const getRecipeFromParser = async (dishType, chatId, searchQuery = null, forceRe
     if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
       throw new Error('Сервис парсинга недоступен. Попробуйте позже.');
     }
+    // Обрабатываем ошибки от API (404, 500 и т.д.)
+    if (error.response) {
+      const status = error.response.status;
+      const errorMessage = error.response.data?.error || 'Неизвестная ошибка';
+      if (status === 404) {
+        throw new Error(errorMessage);
+      }
+      throw new Error(`Ошибка сервера: ${errorMessage}`);
+    }
     throw error;
   }
 };
@@ -1601,7 +1610,9 @@ bot.on("message", async (ctx) => {
         }
       } catch (error) {
         console.error('Ошибка в поиске:', error);
-        await ctx.reply("❌ Ошибка при поиске рецепта. Попробуйте позже.");
+        // Показываем понятное сообщение об ошибке
+        const errorMessage = error.message || 'Ошибка при поиске рецепта. Попробуйте позже.';
+        await ctx.reply(`❌ ${errorMessage}`);
       }
     }
   }

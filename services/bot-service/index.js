@@ -740,6 +740,14 @@ bot.action("another_dish", async (ctx) => {
     }
     // При нажатии "Другое блюдо" принудительно обновляем рецепт
     const result = await getRecipeFromParser(dishType, chatId, searchQuery, true);
+
+    // Проверяем, не совпадает ли новый рецепт с текущим (до обновления в Redis)
+    if (prevUrl === result.url && currentMessage) {
+      // Если рецепт тот же, просто уведомляем пользователя
+      await ctx.answerCbQuery("Это то же самое блюдо. Попробуйте еще раз.");
+      return;
+    }
+
     await setUserHref(chatId, dishType, result.url);
 
     const recipeText = validateAndTruncateMessage(result.recipeText);
@@ -749,26 +757,37 @@ bot.action("another_dish", async (ctx) => {
 
     if (currentMessage) {
       // Редактируем существующее сообщение
-      if (result.hasPhoto && result.photoFileId) {
-        await ctx.telegram.editMessageMedia(
-          chatId,
-          currentMessage.message_id,
-          null,
-          {
-            type: 'photo',
-            media: result.photoFileId,
-            caption: recipeText
-          },
-          { reply_markup: keyboard.reply_markup }
-        );
-      } else {
-        await ctx.telegram.editMessageText(
-          chatId,
-          currentMessage.message_id,
-          null,
-          recipeText,
-          keyboard
-        );
+      try {
+        if (result.hasPhoto && result.photoFileId) {
+          await ctx.telegram.editMessageMedia(
+            chatId,
+            currentMessage.message_id,
+            null,
+            {
+              type: 'photo',
+              media: result.photoFileId,
+              caption: recipeText
+            },
+            { reply_markup: keyboard.reply_markup }
+          );
+        } else {
+          await ctx.telegram.editMessageText(
+            chatId,
+            currentMessage.message_id,
+            null,
+            recipeText,
+            keyboard
+          );
+        }
+      } catch (editError) {
+        // Игнорируем ошибку "message is not modified" - это не критично
+        if (editError.response?.error_code === 400 &&
+            editError.response?.description?.includes('message is not modified')) {
+          await ctx.answerCbQuery("Рецепт не изменился. Попробуйте еще раз.");
+          return;
+        }
+        // Для других ошибок пробрасываем дальше
+        throw editError;
       }
     } else {
       // Если нет сообщения, отправляем новое
@@ -783,6 +802,12 @@ bot.action("another_dish", async (ctx) => {
     }
   } catch (error) {
     console.error('Ошибка в another_dish:', error);
+    // Игнорируем ошибку "message is not modified"
+    if (error.response?.error_code === 400 &&
+        error.response?.description?.includes('message is not modified')) {
+      await ctx.answerCbQuery("Рецепт не изменился. Попробуйте еще раз.");
+      return;
+    }
     try {
       if (currentMessage) {
         await ctx.telegram.editMessageText(

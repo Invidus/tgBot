@@ -1,6 +1,6 @@
 import { Telegraf } from "telegraf";
 import { config } from "../shared/config.js";
-import { getDetailedMenuKeyboard, getSearchKeyboard, getStepNavigationKeyboard, getFavoritesKeyboard, getFavoriteRecipeKeyboard } from "./innerButtons.js";
+import { getDetailedMenuKeyboard, getSearchKeyboard, getStepNavigationKeyboard, getFavoritesKeyboard, getFavoriteRecipeKeyboard, isRecipeUrl } from "./innerButtons.js";
 import { validateAndTruncateMessage } from "./messageUtils.js";
 import Redis from "ioredis";
 import axios from "axios";
@@ -341,7 +341,8 @@ bot.action("breakfast", async (ctx) => {
     const recipeText = validateAndTruncateMessage(result.recipeText);
     const hasHistory = await hasRecipeHistory(chatId, 'breakfast');
     const isInFav = await isInFavorites(chatId, result.url);
-    const keyboard = getDetailedMenuKeyboard(false, hasHistory, isInFav);
+    const isRecipe = isRecipeUrl(result.url);
+    const keyboard = getDetailedMenuKeyboard(false, hasHistory, isInFav, isRecipe);
 
     if (result.hasPhoto && result.photoFileId) {
       await ctx.replyWithPhoto(result.photoFileId, {
@@ -384,7 +385,8 @@ bot.action("dinner", async (ctx) => {
     const recipeText = validateAndTruncateMessage(result.recipeText);
     const hasHistory = await hasRecipeHistory(chatId, 'dinner');
     const isInFav = await isInFavorites(chatId, result.url);
-    const keyboard = getDetailedMenuKeyboard(false, hasHistory, isInFav);
+    const isRecipe = isRecipeUrl(result.url);
+    const keyboard = getDetailedMenuKeyboard(false, hasHistory, isInFav, isRecipe);
 
     if (result.hasPhoto && result.photoFileId) {
       await ctx.replyWithPhoto(result.photoFileId, {
@@ -427,7 +429,8 @@ bot.action("lunch", async (ctx) => {
     const recipeText = validateAndTruncateMessage(result.recipeText);
     const hasHistory = await hasRecipeHistory(chatId, 'lunch');
     const isInFav = await isInFavorites(chatId, result.url);
-    const keyboard = getDetailedMenuKeyboard(false, hasHistory, isInFav);
+    const isRecipe = isRecipeUrl(result.url);
+    const keyboard = getDetailedMenuKeyboard(false, hasHistory, isInFav, isRecipe);
 
     if (result.hasPhoto && result.photoFileId) {
       await ctx.replyWithPhoto(result.photoFileId, {
@@ -499,7 +502,8 @@ bot.action("ingredients", async (ctx) => {
     const recipeText = validateAndTruncateMessage(result.recipeText);
     const hasHistory = await hasRecipeHistory(chatId, dishType);
     const isInFav = await isInFavorites(chatId, url);
-    const keyboard = getDetailedMenuKeyboard(true, hasHistory, isInFav);
+    const isRecipe = isRecipeUrl(url);
+    const keyboard = getDetailedMenuKeyboard(true, hasHistory, isInFav, isRecipe);
 
     // Редактируем существующее сообщение
     if (currentMessage.photo && currentMessage.photo.length > 0) {
@@ -609,7 +613,8 @@ bot.action("add_to_favorites", async (ctx) => {
 
   const recipeRequested = await getRecipeRequested(chatId, dishType);
   const isInFav = await isInFavorites(chatId, url);
-  const keyboard = getDetailedMenuKeyboard(recipeRequested, false, isInFav);
+  const isRecipe = isRecipeUrl(url);
+  const keyboard = getDetailedMenuKeyboard(recipeRequested, false, isInFav, isRecipe);
 
   try {
     if (currentMessage?.photo) {
@@ -673,7 +678,8 @@ bot.action("remove_from_favorites", async (ctx) => {
   const recipeRequested = await getRecipeRequested(chatId, dishType);
   const hasHistory = await hasRecipeHistory(chatId, dishType);
   const isInFav = await isInFavorites(chatId, url);
-  const keyboard = getDetailedMenuKeyboard(recipeRequested, hasHistory, isInFav);
+  const isRecipe = isRecipeUrl(url);
+  const keyboard = getDetailedMenuKeyboard(recipeRequested, hasHistory, isInFav, isRecipe);
 
   try {
     if (currentMessage?.photo) {
@@ -757,7 +763,8 @@ bot.action("another_dish", async (ctx) => {
     const recipeText = validateAndTruncateMessage(result.recipeText);
     const hasHistory = await hasRecipeHistory(chatId, dishType);
     const isInFav = await isInFavorites(chatId, result.url);
-    const keyboard = getDetailedMenuKeyboard(false, hasHistory, isInFav);
+    const isRecipe = isRecipeUrl(result.url);
+    const keyboard = getDetailedMenuKeyboard(false, hasHistory, isInFav, isRecipe);
 
     if (currentMessage) {
       // Редактируем существующее сообщение
@@ -865,7 +872,8 @@ bot.action("previous_recipe", async (ctx) => {
   const hasHistory = await hasRecipeHistory(chatId, dishType);
   const recipeRequested = await getRecipeRequested(chatId, dishType);
   const isInFav = await isInFavorites(chatId, previousRecipe.url);
-  const keyboard = getDetailedMenuKeyboard(recipeRequested, hasHistory, isInFav);
+  const isRecipe = isRecipeUrl(previousRecipe.url);
+  const keyboard = getDetailedMenuKeyboard(recipeRequested, hasHistory, isInFav, isRecipe);
 
   try {
     // Используем сохраненный текст для быстрого отображения
@@ -1192,6 +1200,7 @@ bot.action("step_back", async (ctx) => {
       const isInFav = url ? await isInFavorites(chatId, url) : false;
       const recipeRequested = await getRecipeRequested(chatId, dishType);
       const hasHistory = dishType ? await hasRecipeHistory(chatId, dishType) : false;
+      const isRecipe = url ? isRecipeUrl(url) : true; // По умолчанию считаем рецептом, если URL есть
 
       if (recipeData.hasPhoto && recipeData.dishPhotoFileId) {
         await ctx.telegram.editMessageMedia(
@@ -1203,7 +1212,7 @@ bot.action("step_back", async (ctx) => {
             media: recipeData.dishPhotoFileId,
             caption: recipeData.dishMessageText
           },
-          { reply_markup: getDetailedMenuKeyboard(recipeRequested, hasHistory, isInFav).reply_markup }
+          { reply_markup: getDetailedMenuKeyboard(recipeRequested, hasHistory, isInFav, isRecipe).reply_markup }
         );
       } else {
         await ctx.telegram.editMessageText(
@@ -1211,13 +1220,15 @@ bot.action("step_back", async (ctx) => {
           recipeData.dishMessageId,
           null,
           recipeData.dishMessageText,
-          getDetailedMenuKeyboard(recipeRequested, hasHistory, isInFav)
+          getDetailedMenuKeyboard(recipeRequested, hasHistory, isInFav, isRecipe)
         );
       }
     } catch (e) {
       // Если не удалось отредактировать, отправляем новое
       const hasHistory = await hasRecipeHistory(chatId, 'breakfast');
-      await ctx.reply(recipeData.dishMessageText, getDetailedMenuKeyboard(false, hasHistory, false));
+      const url = await getUserHref(chatId, 'breakfast');
+      const isRecipe = url ? isRecipeUrl(url) : true;
+      await ctx.reply(recipeData.dishMessageText, getDetailedMenuKeyboard(false, hasHistory, false, isRecipe));
     }
   }
 
@@ -1649,7 +1660,8 @@ bot.on("message", async (ctx) => {
         const recipeText = validateAndTruncateMessage(result.recipeText);
         const hasHistory = await hasRecipeHistory(chatId, 'search');
         const isInFav = await isInFavorites(chatId, result.url);
-        const keyboard = getDetailedMenuKeyboard(false, hasHistory, isInFav);
+        const isRecipe = isRecipeUrl(result.url);
+        const keyboard = getDetailedMenuKeyboard(false, hasHistory, isInFav, isRecipe);
 
         if (result.hasPhoto && result.photoFileId) {
           await ctx.replyWithPhoto(result.photoFileId, {

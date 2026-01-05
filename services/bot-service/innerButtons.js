@@ -1,28 +1,44 @@
 import { Markup } from "telegraf";
 
-export const getDetailedMenuKeyboard = (recipeRequested = false, hasHistory = false, isInFavorites = false) => {
-  const buttons = [
-    [Markup.button.callback("Другое блюдо🔁", "another_dish")],
-  ];
+// Функция для проверки, является ли URL рецептом
+export const isRecipeUrl = (url) => {
+  if (!url || typeof url !== 'string') return false;
+  // Рецепты на 1000.menu имеют путь /cooking/
+  // Исключаем служебные страницы: /vacancies, /about, /contacts и т.д.
+  return url.includes('/cooking/') &&
+         !url.includes('/vacancies') &&
+         !url.includes('/about') &&
+         !url.includes('/contacts') &&
+         !url.includes('/privacy') &&
+         !url.includes('/terms');
+};
 
-  // Кнопка "Вернуться к прошлому рецепту" под кнопкой "Другое блюдо"
-  if (hasHistory) {
-    buttons.push([Markup.button.callback("◀️ Вернуться к прошлому рецепту", "previous_recipe")]);
-  }
+export const getDetailedMenuKeyboard = (recipeRequested = false, hasHistory = false, isInFavorites = false, isRecipe = true) => {
+  const buttons = [];
 
-  // Кнопка избранного
-  if (isInFavorites) {
-    buttons.push([Markup.button.callback("❌ Удалить из избранного", "remove_from_favorites")]);
-  } else {
-    buttons.push([Markup.button.callback("⭐ Добавить в избранное", "add_to_favorites")]);
-  }
+  // Показываем кнопки только для рецептов
+  if (isRecipe) {
+    buttons.push([Markup.button.callback("Другое блюдо🔁", "another_dish")]);
 
-  // Если рецепт еще не был запрошен, показываем кнопки в одной строке
-  if (!recipeRequested) {
-    buttons.push([
-      Markup.button.callback("Пошаговый рецепт📖", "step_by_step"),
-      Markup.button.callback("Ингредиенты🔎", "ingredients")
-    ]);
+    // Кнопка "Вернуться к прошлому рецепту" под кнопкой "Другое блюдо"
+    if (hasHistory) {
+      buttons.push([Markup.button.callback("◀️ Вернуться к прошлому рецепту", "previous_recipe")]);
+    }
+
+    // Кнопка избранного
+    if (isInFavorites) {
+      buttons.push([Markup.button.callback("❌ Удалить из избранного", "remove_from_favorites")]);
+    } else {
+      buttons.push([Markup.button.callback("⭐ Добавить в избранное", "add_to_favorites")]);
+    }
+
+    // Если рецепт еще не был запрошен, показываем кнопки в одной строке
+    if (!recipeRequested) {
+      buttons.push([
+        Markup.button.callback("Пошаговый рецепт📖", "step_by_step"),
+        Markup.button.callback("Ингредиенты🔎", "ingredients")
+      ]);
+    }
   }
 
   // Кнопки "Вернуться на главную" и "Закрыть" в одной строке

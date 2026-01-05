@@ -519,6 +519,168 @@ app.post('/parse/full', async (req, res) => {
   }
 });
 
+// Парсинг пошагового рецепта
+app.post('/parse/step-by-step', async (req, res) => {
+  const { url } = req.body;
+
+  try {
+    // Проверяем кэш
+    const cacheKey = `recipe:steps:${url}`;
+    let cached = null;
+    try {
+      cached = await redis.get(cacheKey);
+    } catch (redisError) {
+      console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
+    }
+    if (cached) {
+      return res.json(JSON.parse(cached));
+    }
+
+    // Пробуем через axios сначала
+    try {
+      const $ = await parseWithAxios(url);
+      const steps = [];
+
+      // Парсим шаги
+      $('ol.instructions li:not(.as-ad-step)').each((index, element) => {
+        const $li = $(element);
+        const stepNumber = $li.find('h3').text().trim() || `Шаг ${index + 1}:`;
+
+        let imageUrl = $li.find('a[href*="img"]').attr('href');
+        if (!imageUrl) {
+          imageUrl = $li.find('img').attr('src');
+        }
+        if (imageUrl && !imageUrl.startsWith('http')) {
+          imageUrl = 'https:' + imageUrl;
+        }
+
+        let instruction = $li.find('p.instruction').text().trim();
+        if (!instruction) {
+          instruction = $li.find('a[href*="img"]').attr('title') || '';
+        }
+
+        if (stepNumber || instruction) {
+          steps.push({
+            stepNumber: stepNumber || `Шаг ${index + 1}:`,
+            imageUrl: imageUrl || null,
+            instruction: instruction || 'Инструкция не найдена'
+          });
+        }
+      });
+
+      if (steps.length > 0) {
+        const result = { steps };
+        try {
+          await redis.setex(cacheKey, 3600, JSON.stringify(result));
+        } catch (redisError) {
+          console.warn('⚠️ Ошибка записи в Redis:', redisError.message);
+        }
+        return res.json(result);
+      }
+    } catch (axiosError) {
+      console.log('⚠️ Axios не сработал для пошагового рецепта, пробуем Playwright');
+    }
+
+    // Если axios не сработал, используем Playwright
+    const browserData = getAvailableBrowser();
+    if (!browserData) {
+      return res.status(503).json({ error: 'Нет доступных браузеров' });
+    }
+
+    browserData.activePages++;
+    const page = await browserData.browser.newPage();
+
+    try {
+      await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: 15000
+      });
+
+      // Ждем загрузки списка инструкций
+      try {
+        await page.waitForFunction(
+          () => document.querySelector('ol.instructions') !== null,
+          { timeout: 5000 }
+        );
+      } catch (e) {
+        // Игнорируем, продолжаем
+      }
+
+      const steps = await page.evaluate(() => {
+        const stepsList = [];
+        const instructionsList = document.querySelector('ol.instructions');
+
+        if (!instructionsList) {
+          return stepsList;
+        }
+
+        const listItems = instructionsList.querySelectorAll('li:not(.as-ad-step)');
+        listItems.forEach((li, index) => {
+          const stepHeading = li.querySelector('h3');
+          const stepNumber = stepHeading?.textContent?.trim() || `Шаг ${index + 1}:`;
+
+          let imageUrl = null;
+          const imageLink = li.querySelector('a[href*="img"]');
+          if (imageLink) {
+            imageUrl = imageLink.getAttribute('href');
+            if (imageUrl && !imageUrl.startsWith('http')) {
+              imageUrl = 'https:' + imageUrl;
+            }
+          } else {
+            const imgTag = li.querySelector('img');
+            if (imgTag) {
+              imageUrl = imgTag.getAttribute('src') || imgTag.getAttribute('data-src');
+              if (imageUrl && !imageUrl.startsWith('http')) {
+                imageUrl = 'https:' + imageUrl;
+              }
+            }
+          }
+
+          let instruction = '';
+          const instructionPara = li.querySelector('p.instruction');
+          if (instructionPara) {
+            instruction = instructionPara.textContent?.trim() || '';
+          } else if (imageLink) {
+            instruction = imageLink.getAttribute('title') || '';
+          }
+
+          if (stepNumber || instruction) {
+            stepsList.push({
+              stepNumber: stepNumber || `Шаг ${index + 1}:`,
+              imageUrl: imageUrl || null,
+              instruction: instruction || 'Инструкция не найдена'
+            });
+          }
+        });
+
+        return stepsList;
+      });
+
+      await page.close();
+      browserData.activePages--;
+
+      if (steps.length === 0) {
+        return res.status(404).json({ error: 'Шаги рецепта не найдены' });
+      }
+
+      const result = { steps };
+      try {
+        await redis.setex(cacheKey, 3600, JSON.stringify(result));
+      } catch (redisError) {
+        console.warn('⚠️ Ошибка записи в Redis:', redisError.message);
+      }
+      res.json(result);
+    } catch (playwrightError) {
+      await page.close().catch(() => {});
+      browserData.activePages--;
+      throw playwrightError;
+    }
+  } catch (error) {
+    console.error('Ошибка парсинга пошагового рецепта:', error);
+    res.status(500).json({ error: 'Ошибка парсинга' });
+  }
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({

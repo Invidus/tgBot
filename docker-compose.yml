@@ -51,7 +51,7 @@ services:
       recipe-parser-service:
         condition: service_started
     restart: unless-stopped
-    scale: 2
+    scale: 1  # Telegram Bot API не поддерживает несколько инстансов с polling
 
   recipe-parser-service:
     build:

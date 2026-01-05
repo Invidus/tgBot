@@ -46,6 +46,19 @@ const setRecipeRequested = async (chatId, dishType, value) => {
   await redis.setex(`user:recipeRequested:${chatId}:${dishType}`, 3600, value ? 'true' : 'false');
 };
 
+// Функции для сохранения и получения поискового запроса
+const getUserSearchQuery = async (chatId) => {
+  return await redis.get(`user:searchQuery:${chatId}`);
+};
+
+const setUserSearchQuery = async (chatId, query) => {
+  if (query) {
+    await redis.setex(`user:searchQuery:${chatId}`, 3600, query);
+  } else {
+    await redis.del(`user:searchQuery:${chatId}`);
+  }
+};
+
 // Функции для работы с историей рецептов в Redis
 const MAX_HISTORY_SIZE = 10;
 
@@ -719,8 +732,14 @@ bot.action("another_dish", async (ctx) => {
   await setRecipeRequested(chatId, dishType, false);
 
   try {
+    // Для поиска получаем сохраненный запрос, для остальных типов - null
+    const searchQuery = dishType === 'search' ? await getUserSearchQuery(chatId) : null;
+    if (dishType === 'search' && !searchQuery) {
+      await ctx.answerCbQuery("Сначала выполните поиск");
+      return;
+    }
     // При нажатии "Другое блюдо" принудительно обновляем рецепт
-    const result = await getRecipeFromParser(dishType, chatId, null, true);
+    const result = await getRecipeFromParser(dishType, chatId, searchQuery, true);
     await setUserHref(chatId, dishType, result.url);
 
     const recipeText = validateAndTruncateMessage(result.recipeText);
@@ -1591,6 +1610,8 @@ bot.on("message", async (ctx) => {
     const searchQuery = ctx.message.text.trim();
     if (searchQuery) {
       try {
+        // Сохраняем поисковый запрос для использования при нажатии "Другое блюдо"
+        await setUserSearchQuery(chatId, searchQuery);
         const result = await getRecipeFromParser('search', chatId, searchQuery);
         await setUserHref(chatId, 'search', result.url);
         await setRecipeRequested(chatId, 'search', false);

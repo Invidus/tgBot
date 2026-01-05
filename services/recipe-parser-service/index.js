@@ -363,10 +363,25 @@ app.post('/parse/full', async (req, res) => {
       const $ = await parseWithAxios(url);
 
       const title = $('h1').text() || '';
-      const description = $('.recipe-description').text() || '';
-      const ingredients = $('.ingredient-item').map((i, el) => $(el).text()).get().join('\n');
 
-      const recipeText = `${title}\n\n${description}\n\nИнгредиенты:\n${ingredients}`;
+      // Парсим ингредиенты правильным селектором
+      const ingredients = [];
+      $('#recept-list > div.ingredient meta').each((index, element) => {
+        const content = $(element).attr('content');
+        if (content) ingredients.push(content);
+      });
+
+      // Парсим порции
+      const portion = $('#yield_num_input').val() || $('#yield_num_input').text() || 'не указано';
+
+      // Парсим питательные вещества
+      const proteins = $('#nutr_p').text() || $('#nutr_p').val() || 'не указано';
+      const fat = $('#nutr_f').text() || $('#nutr_f').val() || 'не указано';
+      const carbohydrates = $('#nutr_c').text() || $('#nutr_c').val() || 'не указано';
+      const ccals = $('#nutr_kcal').text() || $('#nutr_kcal').val() || 'не указано';
+
+      const ingredientsText = ingredients.length > 0 ? ingredients.join('\n') : 'Ингредиенты не указаны';
+      const recipeText = `${title}\n\nПорций: ${portion}\nЧто потребуется:\n${ingredientsText}\n━━━━━━━━━━\nБелки: ${proteins}г Жиры: ${fat}г Углеводы: ${carbohydrates}г\nКалорийность на 100г: ${ccals} ккал`;
 
       const result = {
         recipeText,
@@ -381,6 +396,7 @@ app.post('/parse/full', async (req, res) => {
       }
       return res.json(result);
     } catch (axiosError) {
+      console.log('⚠️ Axios не сработал, пробуем Playwright:', axiosError.message);
       // Если axios не сработал, используем Playwright
       const browserData = getAvailableBrowser();
       if (!browserData) {
@@ -396,15 +412,79 @@ app.post('/parse/full', async (req, res) => {
           timeout: 15000
         });
 
-        const recipeText = await page.evaluate(() => {
-          const title = document.querySelector('h1')?.textContent || '';
-          const description = document.querySelector('.recipe-description')?.textContent || '';
-          const ingredients = Array.from(document.querySelectorAll('.ingredient-item'))
-            .map(el => el.textContent)
-            .join('\n');
+        // Извлекаем данные параллельно
+        const [ingredientsData, portion, nutritionData] = await Promise.all([
+          // Извлекаем ингредиенты
+          page.evaluate(() => {
+            const ingredients = [];
+            const metaElements = document.querySelectorAll('#recept-list > div.ingredient meta');
+            metaElements.forEach(el => {
+              const content = el.getAttribute('content');
+              if (content) ingredients.push(content);
+            });
+            return ingredients;
+          }),
+          // Извлекаем порции
+          page.$eval('#yield_num_input', el => el?.value || 'не указано').catch(() => 'не указано'),
+          // Извлекаем питательные вещества
+          page.evaluate(() => {
+            const extractValue = (selector) => {
+              let el = document.querySelector(selector);
+              if (!el) return '';
+              const text = el.textContent?.trim() || el.innerText?.trim() || el.getAttribute('value')?.trim() || el.value?.trim() || '';
+              return (text && text !== 'undefined' && text !== '') ? text : '';
+            };
+            return {
+              proteins: extractValue('#nutr_p'),
+              fat: extractValue('#nutr_f'),
+              carbohydrates: extractValue('#nutr_c'),
+              ccals: extractValue('#nutr_kcal')
+            };
+          })
+        ]);
 
-          return `${title}\n\n${description}\n\nИнгредиенты:\n${ingredients}`;
-        });
+        // Ждем заполнения питательных веществ только если они пустые
+        let finalNutrition = nutritionData;
+        if (!nutritionData.proteins && !nutritionData.fat && !nutritionData.carbohydrates && !nutritionData.ccals) {
+          try {
+            await page.waitForFunction(
+              () => {
+                const p = document.querySelector('#nutr_p');
+                return p && p.textContent && p.textContent.trim() !== '' && p.textContent.trim() !== 'undefined';
+              },
+              { timeout: 2000 }
+            );
+            // Повторно извлекаем если дождались
+            finalNutrition = await page.evaluate(() => {
+              const extractValue = (selector) => {
+                const el = document.querySelector(selector);
+                if (!el) return '';
+                const text = el.textContent?.trim() || el.innerText?.trim() || el.getAttribute('value')?.trim() || el.value?.trim() || '';
+                return (text && text !== 'undefined' && text !== '') ? text : '';
+              };
+              return {
+                proteins: extractValue('#nutr_p'),
+                fat: extractValue('#nutr_f'),
+                carbohydrates: extractValue('#nutr_c'),
+                ccals: extractValue('#nutr_kcal')
+              };
+            });
+          } catch (e) {
+            // Игнорируем, используем то что есть
+          }
+        }
+
+        // Получаем заголовок
+        const title = await page.$eval('h1', el => el?.textContent || '').catch(() => '');
+
+        // Формируем текст рецепта
+        const ingredientsText = ingredientsData.length > 0 ? ingredientsData.join('\n') : 'Ингредиенты не указаны';
+        const proteins = finalNutrition.proteins ? `Белки: ${finalNutrition.proteins}г ` : 'Белки: не указано ';
+        const fat = finalNutrition.fat ? `Жиры: ${finalNutrition.fat}г ` : 'Жиры: не указано ';
+        const carbohydrates = finalNutrition.carbohydrates ? `Углеводы: ${finalNutrition.carbohydrates}г ` : 'Углеводы: не указано ';
+        const ccals = finalNutrition.ccals ? `Калорийность на 100 г: ${finalNutrition.ccals} ккал ` : 'Калорийность на 100г: не указано ';
+
+        const recipeText = `${title}\n\nПорций: ${portion}\nЧто потребуется:\n${ingredientsText}\n━━━━━━━━━━\n${proteins}${fat}${carbohydrates}\n${ccals}`;
 
         await page.close();
         browserData.activePages--;
@@ -414,6 +494,12 @@ app.post('/parse/full', async (req, res) => {
           hasPhoto: false,
           photoFileId: null
         };
+
+        // Проверяем, что получили данные
+        if (!recipeText || recipeText.trim() === '' || recipeText === '\n\nПорций: не указано\nЧто потребуется:\nИнгредиенты не указаны') {
+          console.warn('⚠️ Получен пустой рецепт для URL:', url);
+          return res.status(500).json({ error: 'Не удалось получить данные рецепта' });
+        }
 
         try {
           await redis.setex(cacheKey, 3600, JSON.stringify(result));

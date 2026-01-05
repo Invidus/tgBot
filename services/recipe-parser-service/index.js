@@ -290,7 +290,7 @@ app.post('/parse/lunch', async (req, res) => {
 
 // Парсинг поиска
 app.post('/parse/search', async (req, res) => {
-  const { chatId, searchQuery } = req.body;
+  const { chatId, searchQuery, forceRefresh } = req.body;
 
   try {
     if (!searchQuery || searchQuery.length > 200) {
@@ -302,15 +302,30 @@ app.post('/parse/search', async (req, res) => {
       return res.status(400).json({ error: 'Поисковый запрос не может быть пустым' });
     }
 
+    console.log(`🔍 Поиск: "${trimmedQuery}", chatId: ${chatId}, forceRefresh: ${forceRefresh}`);
+
     const cacheKey = `recipe:search:${chatId}:${trimmedQuery}`;
-    let cached = null;
-    try {
-      cached = await redis.get(cacheKey);
-    } catch (redisError) {
-      console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
-    }
-    if (cached) {
-      return res.json(JSON.parse(cached));
+
+    // Проверяем кэш только если не требуется принудительное обновление
+    if (!forceRefresh) {
+      let cached = null;
+      try {
+        cached = await redis.get(cacheKey);
+      } catch (redisError) {
+        console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
+      }
+      if (cached) {
+        console.log(`✅ Возвращаем из кеша для "${trimmedQuery}"`);
+        return res.json(JSON.parse(cached));
+      }
+    } else {
+      // Удаляем старый кэш при принудительном обновлении
+      console.log(`🔄 Принудительное обновление для "${trimmedQuery}"`);
+      try {
+        await redis.del(cacheKey);
+      } catch (redisError) {
+        console.warn('⚠️ Ошибка удаления кэша:', redisError.message);
+      }
     }
 
     // Используем правильный URL: пробелы заменяются на +, кириллица передается как есть

@@ -734,12 +734,16 @@ bot.action("another_dish", async (ctx) => {
   try {
     // Для поиска получаем сохраненный запрос, для остальных типов - null
     const searchQuery = dishType === 'search' ? await getUserSearchQuery(chatId) : null;
+    console.log(`🔄 another_dish: dishType=${dishType}, searchQuery="${searchQuery}", chatId=${chatId}`);
     if (dishType === 'search' && !searchQuery) {
+      console.log(`❌ another_dish: поисковый запрос не найден для chatId=${chatId}`);
       await ctx.answerCbQuery("Сначала выполните поиск");
       return;
     }
     // При нажатии "Другое блюдо" принудительно обновляем рецепт
+    console.log(`📤 another_dish: отправка запроса с searchQuery="${searchQuery}", forceRefresh=true`);
     const result = await getRecipeFromParser(dishType, chatId, searchQuery, true);
+    console.log(`✅ another_dish: получен результат, url=${result.url}`);
 
     // Проверяем, не совпадает ли новый рецепт с текущим (до обновления в Redis)
     if (prevUrl === result.url && currentMessage) {
@@ -1636,6 +1640,7 @@ bot.on("message", async (ctx) => {
     if (searchQuery) {
       try {
         // Сохраняем поисковый запрос для использования при нажатии "Другое блюдо"
+        console.log(`💾 Сохранение поискового запроса: "${searchQuery}" для chatId=${chatId}`);
         await setUserSearchQuery(chatId, searchQuery);
         const result = await getRecipeFromParser('search', chatId, searchQuery);
         await setUserHref(chatId, 'search', result.url);

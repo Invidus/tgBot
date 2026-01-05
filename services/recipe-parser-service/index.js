@@ -36,18 +36,23 @@ let activePages = 0;
 
 // Инициализация пула браузеров
 const initBrowserPool = async () => {
+  // Определяем путь к системному Chromium
+  const chromiumPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
+                       '/usr/bin/chromium-browser';
+
   for (let i = 0; i < MAX_BROWSERS; i++) {
     try {
       const browser = await chromium.launch({
         headless: true,
-        executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
+        executablePath: chromiumPath,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-gpu',
           '--disable-images',
-          '--disable-css'
+          '--disable-css',
+          '--single-process' // Важно для Alpine Linux
         ]
       });
       browserPool.push({

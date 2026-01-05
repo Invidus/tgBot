@@ -1,17 +1,21 @@
 FROM node:20-alpine
 
+# Настраиваем переменные окружения для использования системного Chromium
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
 # Устанавливаем зависимости для Playwright
 RUN apk add --no-cache \
     chromium \
+    chromium-chromedriver \
     nss \
     freetype \
     harfbuzz \
     ca-certificates \
-    ttf-freefont \
-    libc6-compat
+    ttf-freefont
 
 # Проверяем путь к Chromium
-RUN which chromium-browser || which chromium || echo "Chromium not found"
+RUN ls -la /usr/bin/chromium* || echo "Checking Chromium paths"
 
 WORKDIR /app
 
@@ -23,9 +27,6 @@ COPY services/recipe-parser-service/index.js ./recipe-parser-service/
 # Устанавливаем зависимости
 WORKDIR /app/recipe-parser-service
 RUN npm install
-
-# Устанавливаем браузеры Playwright
-RUN npx playwright install chromium
 
 # Устанавливаем зависимости для shared
 WORKDIR /app/shared

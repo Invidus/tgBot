@@ -69,7 +69,7 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    scale: 3
+    scale: 2
 
   database-service:
     build:

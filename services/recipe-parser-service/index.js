@@ -19,8 +19,8 @@ const redis = new Redis({
 });
 
 const browserPool = [];
-const MAX_BROWSERS = 3;
-const MAX_PAGES_PER_BROWSER = 10;
+const MAX_BROWSERS = 2;
+const MAX_PAGES_PER_BROWSER = 5;
 let activePages = 0;
 
 // Инициализация пула браузеров

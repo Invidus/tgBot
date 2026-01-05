@@ -15,7 +15,18 @@ const redis = new Redis({
   retryStrategy: (times) => {
     const delay = Math.min(times * 50, 2000);
     return delay;
-  }
+  },
+  maxRetriesPerRequest: 3,
+  enableOfflineQueue: false
+});
+
+// Обработка ошибок Redis
+redis.on('error', (err) => {
+  console.error('⚠️ Redis ошибка:', err.message);
+});
+
+redis.on('connect', () => {
+  console.log('✅ Redis подключен');
 });
 
 const browserPool = [];
@@ -47,7 +58,12 @@ const initBrowserPool = async () => {
       console.error(`Ошибка создания браузера ${i + 1}:`, error.message);
     }
   }
-  console.log(`✅ Пул из ${browserPool.length} браузеров инициализирован`);
+
+  if (browserPool.length === 0) {
+    console.warn('⚠️ Не удалось создать ни одного браузера, будет использоваться только axios');
+  } else {
+    console.log(`✅ Пул из ${browserPool.length} браузеров инициализирован`);
+  }
 };
 
 // Получение доступного браузера
@@ -73,7 +89,12 @@ app.post('/parse/breakfast', async (req, res) => {
   try {
     // Проверяем кэш
     const cacheKey = `recipe:breakfast:${chatId}`;
-    const cached = await redis.get(cacheKey);
+    let cached = null;
+    try {
+      cached = await redis.get(cacheKey);
+    } catch (redisError) {
+      console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
+    }
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -107,7 +128,11 @@ app.post('/parse/breakfast', async (req, res) => {
     };
 
     // Кэшируем на 1 час
-    await redis.setex(cacheKey, 3600, JSON.stringify(result));
+    try {
+      await redis.setex(cacheKey, 3600, JSON.stringify(result));
+    } catch (redisError) {
+      console.warn('⚠️ Ошибка записи в Redis:', redisError.message);
+    }
 
     res.json(result);
   } catch (error) {
@@ -122,7 +147,12 @@ app.post('/parse/dinner', async (req, res) => {
 
   try {
     const cacheKey = `recipe:dinner:${chatId}`;
-    const cached = await redis.get(cacheKey);
+    let cached = null;
+    try {
+      cached = await redis.get(cacheKey);
+    } catch (redisError) {
+      console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
+    }
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -154,7 +184,11 @@ app.post('/parse/dinner', async (req, res) => {
       photoFileId: null
     };
 
-    await redis.setex(cacheKey, 3600, JSON.stringify(result));
+    try {
+      await redis.setex(cacheKey, 3600, JSON.stringify(result));
+    } catch (redisError) {
+      console.warn('⚠️ Ошибка записи в Redis:', redisError.message);
+    }
     res.json(result);
   } catch (error) {
     console.error('Ошибка парсинга обеда:', error);
@@ -168,7 +202,12 @@ app.post('/parse/lunch', async (req, res) => {
 
   try {
     const cacheKey = `recipe:lunch:${chatId}`;
-    const cached = await redis.get(cacheKey);
+    let cached = null;
+    try {
+      cached = await redis.get(cacheKey);
+    } catch (redisError) {
+      console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
+    }
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -200,7 +239,11 @@ app.post('/parse/lunch', async (req, res) => {
       photoFileId: null
     };
 
-    await redis.setex(cacheKey, 3600, JSON.stringify(result));
+    try {
+      await redis.setex(cacheKey, 3600, JSON.stringify(result));
+    } catch (redisError) {
+      console.warn('⚠️ Ошибка записи в Redis:', redisError.message);
+    }
     res.json(result);
   } catch (error) {
     console.error('Ошибка парсинга ужина:', error);
@@ -218,7 +261,12 @@ app.post('/parse/search', async (req, res) => {
     }
 
     const cacheKey = `recipe:search:${chatId}:${searchQuery}`;
-    const cached = await redis.get(cacheKey);
+    let cached = null;
+    try {
+      cached = await redis.get(cacheKey);
+    } catch (redisError) {
+      console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
+    }
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -250,7 +298,11 @@ app.post('/parse/search', async (req, res) => {
       photoFileId: null
     };
 
-    await redis.setex(cacheKey, 3600, JSON.stringify(result));
+    try {
+      await redis.setex(cacheKey, 3600, JSON.stringify(result));
+    } catch (redisError) {
+      console.warn('⚠️ Ошибка записи в Redis:', redisError.message);
+    }
     res.json(result);
   } catch (error) {
     console.error('Ошибка парсинга поиска:', error);
@@ -265,7 +317,12 @@ app.post('/parse/full', async (req, res) => {
   try {
     // Проверяем кэш
     const cacheKey = `recipe:full:${url}`;
-    const cached = await redis.get(cacheKey);
+    let cached = null;
+    try {
+      cached = await redis.get(cacheKey);
+    } catch (redisError) {
+      console.warn('⚠️ Ошибка чтения из Redis:', redisError.message);
+    }
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -286,7 +343,11 @@ app.post('/parse/full', async (req, res) => {
         photoFileId: null
       };
 
-      await redis.setex(cacheKey, 3600, JSON.stringify(result));
+      try {
+        await redis.setex(cacheKey, 3600, JSON.stringify(result));
+      } catch (redisError) {
+        console.warn('⚠️ Ошибка записи в Redis:', redisError.message);
+      }
       return res.json(result);
     } catch (axiosError) {
       // Если axios не сработал, используем Playwright
@@ -323,7 +384,11 @@ app.post('/parse/full', async (req, res) => {
           photoFileId: null
         };
 
-        await redis.setex(cacheKey, 3600, JSON.stringify(result));
+        try {
+          await redis.setex(cacheKey, 3600, JSON.stringify(result));
+        } catch (redisError) {
+          console.warn('⚠️ Ошибка записи в Redis:', redisError.message);
+        }
         res.json(result);
       } catch (playwrightError) {
         await page.close().catch(() => {});
@@ -357,7 +422,11 @@ initBrowserPool()
   })
   .catch((error) => {
     console.error('❌ Ошибка инициализации Recipe Parser Service:', error);
-    process.exit(1);
+    // Запускаем сервис даже если браузеры не инициализированы
+    // Будет работать через axios
+    app.listen(PORT, () => {
+      console.log(`⚠️ Recipe Parser Service запущен на порту ${PORT} (только axios)`);
+    });
   });
 
 // Graceful shutdown

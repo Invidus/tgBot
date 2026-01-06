@@ -345,12 +345,36 @@ app.post('/parse/search', async (req, res) => {
     // Функция для проверки, является ли URL рецептом
     const isRecipeUrl = (url) => {
       if (!url || typeof url !== 'string') return false;
-      return url.includes('/cooking/') &&
-             !url.includes('/vacancies') &&
-             !url.includes('/about') &&
-             !url.includes('/contacts') &&
-             !url.includes('/privacy') &&
-             !url.includes('/terms');
+
+      // Сначала проверяем, что это не служебная страница
+      if (url.includes('/vacancies') ||
+          url.includes('/about') ||
+          url.includes('/contacts') ||
+          url.includes('/privacy') ||
+          url.includes('/terms')) {
+        return false;
+      }
+
+      // Рецепты должны содержать /cooking/
+      // Если URL не содержит /cooking/, это не рецепт
+      if (!url.includes('/cooking/')) {
+        return false;
+      }
+
+      return true;
+    };
+
+    // Функция для проверки, является ли заголовок рецептом (не вакансией)
+    const isRecipeTitle = (title) => {
+      if (!title || typeof title !== 'string') return false;
+      const titleLower = title.toLowerCase();
+      // Исключаем заголовки, связанные с вакансиями и работой
+      const excludeKeywords = [
+        'вакансии', 'вакансия', 'работа', 'работать', 'трудоустройство',
+        'сотрудник', 'сотрудники', 'команда', 'карьера', 'job', 'vacancy',
+        'хочу работать', 'работа с нами', 'присоединяйся'
+      ];
+      return !excludeKeywords.some(keyword => titleLower.includes(keyword));
     };
 
     // Пытаемся найти рецепт, перебирая карточки в случайном порядке
@@ -371,13 +395,18 @@ app.post('/parse/search', async (req, res) => {
     // Ищем первую карточку, которая является рецептом
     for (const cardIndex of cardIndices) {
       const currentCard = $(cards[cardIndex]);
-      const currentHref = "https://1000.menu" + currentCard.find(".info-preview > a.h5").attr("href");
+      const hrefAttr = currentCard.find(".info-preview > a.h5").attr("href");
 
-      // Проверяем, является ли это рецептом
-      if (isRecipeUrl(currentHref)) {
+      if (!hrefAttr) continue; // Пропускаем карточки без ссылки
+
+      const currentHref = "https://1000.menu" + hrefAttr;
+      const currentTitle = currentCard.find(".info-preview > a.h5").text();
+
+      // Проверяем, является ли это рецептом (по URL и заголовку)
+      if (isRecipeUrl(currentHref) && isRecipeTitle(currentTitle)) {
         card = currentCard;
         href = currentHref;
-        title = card.find(".info-preview > a.h5").text();
+        title = currentTitle;
         description = card.find(".info-preview > div.preview-text").text();
         time = card.find(".info-preview .level-right > span").text();
         ccal = card.find(".info-preview .level-left > span").text();

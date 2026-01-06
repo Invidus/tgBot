@@ -622,9 +622,10 @@ bot.action("add_to_favorites", async (ctx) => {
   }
 
   const recipeRequested = await getRecipeRequested(chatId, dishType);
+  const hasHistory = await hasRecipeHistory(chatId, dishType);
   const isInFav = await isInFavorites(chatId, url);
   const isRecipe = isRecipeUrl(url);
-  const keyboard = getDetailedMenuKeyboard(recipeRequested, false, isInFav, isRecipe);
+  const keyboard = getDetailedMenuKeyboard(recipeRequested, hasHistory, isInFav, isRecipe);
 
   try {
     if (currentMessage?.photo) {
@@ -644,8 +645,11 @@ bot.action("add_to_favorites", async (ctx) => {
         keyboard
       );
     }
+    // Убираем индикатор загрузки после успешного обновления
+    await ctx.answerCbQuery().catch(() => {});
   } catch (e) {
     // Игнорируем ошибки редактирования
+    await ctx.answerCbQuery().catch(() => {});
   }
 });
 

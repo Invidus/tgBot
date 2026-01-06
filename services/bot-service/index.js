@@ -1643,14 +1643,13 @@ bot.action(/^favorite_step_by_step_(\d+)$/, async (ctx) => {
 
 // Обработчик возврата на главную
 bot.action("back_to_main", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   await setUserState(chatId, 0);
 
   const favoritesCount = await getFavoritesCount(chatId);
-
-  await ctx.reply("Выберите действие", {
+  const mainMenuKeyboard = {
     reply_markup: {
       inline_keyboard: [
         [{ text: "Завтрак🍏", callback_data: "breakfast" }],
@@ -1661,7 +1660,59 @@ bot.action("back_to_main", async (ctx) => {
         [{ text: "Закрыть❌", callback_data: "close_menu" }]
       ]
     }
-  });
+  };
+
+  const currentMessage = ctx.callbackQuery?.message;
+  const messageText = "Выберите действие";
+
+  try {
+    if (currentMessage) {
+      // Пытаемся отредактировать существующее сообщение
+      if (currentMessage.photo && currentMessage.photo.length > 0) {
+        // Если было фото, заменяем на текст с клавиатурой
+        try {
+          await ctx.telegram.editMessageMedia(
+            chatId,
+            currentMessage.message_id,
+            null,
+            {
+              type: 'photo',
+              media: currentMessage.photo[currentMessage.photo.length - 1].file_id,
+              caption: messageText
+            },
+            mainMenuKeyboard
+          );
+        } catch (e) {
+          // Если не удалось отредактировать медиа, удаляем и отправляем новое
+          await ctx.telegram.deleteMessage(chatId, currentMessage.message_id).catch(() => {});
+          await ctx.reply(messageText, mainMenuKeyboard);
+        }
+      } else {
+        // Если было текстовое сообщение, редактируем его
+        await ctx.telegram.editMessageText(
+          chatId,
+          currentMessage.message_id,
+          null,
+          messageText,
+          mainMenuKeyboard
+        );
+      }
+    } else {
+      // Если нет сообщения, отправляем новое
+      await ctx.reply(messageText, mainMenuKeyboard);
+    }
+    // Убираем индикатор загрузки после успешного обновления
+    await ctx.answerCbQuery().catch(() => {});
+  } catch (error) {
+    // Если редактирование не удалось, отправляем новое сообщение
+    console.error('Ошибка при редактировании сообщения в back_to_main:', error);
+    try {
+      await ctx.reply(messageText, mainMenuKeyboard);
+      await ctx.answerCbQuery().catch(() => {});
+    } catch (e) {
+      await ctx.answerCbQuery("❌ Ошибка при возврате на главную").catch(() => {});
+    }
+  }
 });
 
 // Обработчик закрытия меню

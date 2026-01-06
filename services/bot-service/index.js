@@ -977,7 +977,12 @@ bot.action("step_by_step", async (ctx) => {
       return;
     }
 
-    // Сохраняем состояние в Redis
+    // Проверяем статус избранного перед сохранением
+    const isInFav = await isInFavorites(chatId, url);
+    const hasHistory = await hasRecipeHistory(chatId, dishType);
+    const recipeRequested = await getRecipeRequested(chatId, dishType);
+
+    // Сохраняем состояние в Redis (включая URL и статус избранного)
     await setStepByStepData(chatId, {
       steps: steps,
       currentStep: 0,
@@ -985,7 +990,12 @@ bot.action("step_by_step", async (ctx) => {
       dishMessageText: dishMessageText,
       hasPhoto: hasPhoto,
       dishPhotoFileId: dishPhotoFileId,
-      isNavigating: false
+      isNavigating: false,
+      url: url, // Сохраняем URL рецепта
+      dishType: dishType, // Сохраняем тип блюда
+      isInFav: isInFav, // Сохраняем статус избранного
+      hasHistory: hasHistory, // Сохраняем наличие истории
+      recipeRequested: recipeRequested // Сохраняем флаг запрошенного рецепта
     });
 
     // Отображаем первый шаг
@@ -1189,18 +1199,51 @@ bot.action("step_back", async (ctx) => {
   if (recipeData && recipeData.dishMessageId) {
     // Восстанавливаем исходное сообщение с блюдом
     try {
-      const state = await getUserState(chatId);
-      let dishType = '';
-      if (state === 1) dishType = 'breakfast';
-      else if (state === 2) dishType = 'dinner';
-      else if (state === 3) dishType = 'lunch';
-      else if (state === 4) dishType = 'search';
+      // Используем сохраненные данные из recipeData, если они есть
+      // Иначе получаем из текущего состояния
+      let url = recipeData.url;
+      let dishType = recipeData.dishType;
+      let isInFav = recipeData.isInFav;
+      let hasHistory = recipeData.hasHistory;
+      let recipeRequested = recipeData.recipeRequested;
 
-      const url = await getUserHref(chatId, dishType);
-      const isInFav = url ? await isInFavorites(chatId, url) : false;
-      const recipeRequested = await getRecipeRequested(chatId, dishType);
-      const hasHistory = dishType ? await hasRecipeHistory(chatId, dishType) : false;
+      // Если данных нет в recipeData, получаем из текущего состояния
+      if (!url || !dishType) {
+        const state = await getUserState(chatId);
+        if (state === 1) dishType = 'breakfast';
+        else if (state === 2) dishType = 'dinner';
+        else if (state === 3) dishType = 'lunch';
+        else if (state === 4) dishType = 'search';
+
+        url = await getUserHref(chatId, dishType);
+      }
+
+      // Для рецептов из избранного статус всегда true
+      // Для обычных рецептов проверяем актуальный статус при возврате
+      if (recipeData.favoriteId) {
+        isInFav = true; // Рецепт из избранного всегда в избранном
+      } else if (url) {
+        // Проверяем актуальный статус избранного при возврате
+        isInFav = await isInFavorites(chatId, url);
+      }
+
+      // Если другие данные не были сохранены, получаем их
+      if (typeof hasHistory !== 'boolean' && dishType) {
+        hasHistory = await hasRecipeHistory(chatId, dishType);
+      }
+      if (typeof recipeRequested !== 'boolean' && dishType) {
+        recipeRequested = await getRecipeRequested(chatId, dishType);
+      }
+
       const isRecipe = url ? isRecipeUrl(url) : true; // По умолчанию считаем рецептом, если URL есть
+
+      // Если это рецепт из избранного, используем специальную клавиатуру
+      let keyboard;
+      if (recipeData.favoriteId) {
+        keyboard = getFavoriteRecipeKeyboard(recipeData.favoriteId);
+      } else {
+        keyboard = getDetailedMenuKeyboard(recipeRequested, hasHistory, isInFav, isRecipe);
+      }
 
       if (recipeData.hasPhoto && recipeData.dishPhotoFileId) {
         await ctx.telegram.editMessageMedia(
@@ -1212,7 +1255,7 @@ bot.action("step_back", async (ctx) => {
             media: recipeData.dishPhotoFileId,
             caption: recipeData.dishMessageText
           },
-          { reply_markup: getDetailedMenuKeyboard(recipeRequested, hasHistory, isInFav, isRecipe).reply_markup }
+          { reply_markup: keyboard.reply_markup }
         );
       } else {
         await ctx.telegram.editMessageText(
@@ -1220,7 +1263,7 @@ bot.action("step_back", async (ctx) => {
           recipeData.dishMessageId,
           null,
           recipeData.dishMessageText,
-          getDetailedMenuKeyboard(recipeRequested, hasHistory, isInFav, isRecipe)
+          keyboard
         );
       }
     } catch (e) {
@@ -1537,7 +1580,12 @@ bot.action(/^favorite_step_by_step_(\d+)$/, async (ctx) => {
       return;
     }
 
-    // Сохраняем состояние в Redis
+    // Проверяем статус избранного (должен быть true, так как это из избранного)
+    const isInFav = true; // Рецепт из избранного всегда в избранном
+    const hasHistory = false; // Для рецептов из избранного истории нет
+    const recipeRequested = false; // Рецепт уже запрошен
+
+    // Сохраняем состояние в Redis (включая URL и статус избранного)
     await setStepByStepData(chatId, {
       steps: steps,
       currentStep: 0,
@@ -1546,7 +1594,12 @@ bot.action(/^favorite_step_by_step_(\d+)$/, async (ctx) => {
       hasPhoto: hasPhoto,
       dishPhotoFileId: dishPhotoFileId,
       isNavigating: false,
-      favoriteId: favoriteId // Сохраняем ID избранного для возврата
+      favoriteId: favoriteId, // Сохраняем ID избранного для возврата
+      url: url, // Сохраняем URL рецепта
+      dishType: 'favorite', // Специальный тип для избранного
+      isInFav: isInFav, // Сохраняем статус избранного (всегда true)
+      hasHistory: hasHistory, // Сохраняем наличие истории
+      recipeRequested: recipeRequested // Сохраняем флаг запрошенного рецепта
     });
 
     // Отображаем первый шаг

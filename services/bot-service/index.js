@@ -1226,7 +1226,7 @@ bot.action("step_next", async (ctx) => {
 
 // Обработчик для возврата назад (к меню блюда)
 bot.action("step_back", async (ctx) => {
-  await ctx.answerCbQuery();
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   const recipeData = await getStepByStepData(chatId);
@@ -1308,13 +1308,20 @@ bot.action("step_back", async (ctx) => {
           keyboard
         );
       }
+      // Убираем индикатор загрузки после успешного восстановления
+      await ctx.answerCbQuery().catch(() => {});
     } catch (e) {
       // Если не удалось отредактировать, отправляем новое
       const hasHistory = await hasRecipeHistory(chatId, 'breakfast');
       const url = await getUserHref(chatId, 'breakfast');
       const isRecipe = url ? isRecipeUrl(url) : true;
       await ctx.reply(recipeData.dishMessageText, getDetailedMenuKeyboard(false, hasHistory, false, isRecipe));
+      // Убираем индикатор загрузки после отправки нового сообщения
+      await ctx.answerCbQuery().catch(() => {});
     }
+  } else {
+    // Если нет данных о рецепте, просто убираем индикатор
+    await ctx.answerCbQuery().catch(() => {});
   }
 
   // Очищаем состояние
@@ -1669,6 +1676,22 @@ bot.action("back_to_main", async (ctx) => {
   // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
+  const currentMessage = ctx.callbackQuery?.message;
+
+  // Проверяем, есть ли активный пошаговый рецепт
+  const recipeData = await getStepByStepData(chatId);
+
+  // Если есть активный пошаговый рецепт, удаляем текущее сообщение со шагом
+  if (recipeData && currentMessage) {
+    try {
+      await ctx.telegram.deleteMessage(chatId, currentMessage.message_id).catch(() => {});
+    } catch (e) {
+      // Игнорируем ошибки удаления
+    }
+    // Очищаем данные пошагового рецепта
+    await clearStepByStepData(chatId);
+  }
+
   await setUserState(chatId, 0);
 
   const favoritesCount = await getFavoritesCount(chatId);
@@ -1685,11 +1708,13 @@ bot.action("back_to_main", async (ctx) => {
     }
   };
 
-  const currentMessage = ctx.callbackQuery?.message;
   const messageText = "Выберите действие";
 
   try {
-    if (currentMessage) {
+    // Если мы удалили сообщение пошагового рецепта, просто отправляем новое
+    if (recipeData) {
+      await ctx.reply(messageText, mainMenuKeyboard);
+    } else if (currentMessage) {
       // Пытаемся отредактировать существующее сообщение
       if (currentMessage.photo && currentMessage.photo.length > 0) {
         // Если было фото, заменяем на текст с клавиатурой

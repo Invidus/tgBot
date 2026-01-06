@@ -126,8 +126,8 @@ export const getStepNavigationKeyboard = (currentStep, totalSteps) => {
 
   buttons.push(navButtons);
 
-  // Кнопка "Вернуться назад"
-  buttons.push([Markup.button.callback("Вернуться назад↩️", "step_back")]);
+  // Кнопка "Назад" - возвращает к исходному сообщению с блюдом
+  buttons.push([Markup.button.callback("Назад", "step_back")]);
 
   return Markup.inlineKeyboard(buttons);
 };

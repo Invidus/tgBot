@@ -328,7 +328,7 @@ bot.start(async (ctx) => {
 
 // Обработчик выбора завтрака
 bot.action("breakfast", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Загрузка...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   await setUserState(chatId, 1);
@@ -360,7 +360,7 @@ bot.action("breakfast", async (ctx) => {
 
 // Обработчик выбора обеда
 bot.action("dinner", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Загрузка...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   await setUserState(chatId, 2);
@@ -404,7 +404,7 @@ bot.action("dinner", async (ctx) => {
 
 // Обработчик выбора ужина
 bot.action("lunch", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Загрузка...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   await setUserState(chatId, 3);
@@ -462,7 +462,7 @@ bot.action("ingredients_disabled", async (ctx) => {
 
 // Обработчик получения полного рецепта (Ингредиенты)
 bot.action("ingredients", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Загрузка...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   const state = await getUserState(chatId);
@@ -546,7 +546,7 @@ bot.action("ingredients", async (ctx) => {
 
 // Обработчик добавления в избранное
 bot.action("add_to_favorites", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Добавление в избранное...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   const state = await getUserState(chatId);
@@ -641,7 +641,7 @@ bot.action("add_to_favorites", async (ctx) => {
 
 // Обработчик удаления из избранного
 bot.action("remove_from_favorites", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Удаление из избранного...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   const state = await getUserState(chatId);
@@ -706,7 +706,7 @@ bot.action("remove_from_favorites", async (ctx) => {
 
 // Обработчик "Другое блюдо"
 bot.action("another_dish", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Загрузка...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   const state = await getUserState(chatId);
@@ -839,7 +839,7 @@ bot.action("another_dish", async (ctx) => {
 // Обработчик возврата к предыдущему рецепту (пока упрощенный)
 // Обработчик возврата к предыдущему рецепту
 bot.action("previous_recipe", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Загрузка...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   const state = await getUserState(chatId);
@@ -1184,7 +1184,7 @@ bot.action("step_next", async (ctx) => {
 
 // Обработчик для возврата назад (к меню блюда)
 bot.action("step_back", async (ctx) => {
-  await ctx.answerCbQuery();
+  await ctx.answerCbQuery("⏳ Загрузка...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   const recipeData = await getStepByStepData(chatId);
@@ -1294,7 +1294,7 @@ bot.action("step_info", async (ctx) => {
 
 // Обработчик списка избранного
 bot.action("favorites_list", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Загрузка...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   const favorites = await getFavoritesFromDB(chatId, 0, 50);
@@ -1325,7 +1325,7 @@ bot.action("favorites_list", async (ctx) => {
 
 // Обработчик просмотра рецепта из избранного
 bot.action(/^favorite_(\d+)$/, async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Загрузка...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   const favoriteId = parseInt(ctx.match[1]);
@@ -1365,7 +1365,7 @@ bot.action(/^favorite_(\d+)$/, async (ctx) => {
 
 // Обработчик удаления из избранного из списка
 bot.action(/^remove_favorite_(\d+)$/, async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Удаление...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   const favoriteId = parseInt(ctx.match[1]);
@@ -1426,7 +1426,7 @@ bot.action(/^remove_favorite_(\d+)$/, async (ctx) => {
 
 // Обработчик пагинации избранного
 bot.action(/^favorites_page_(\d+)$/, async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Загрузка...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   const page = parseInt(ctx.match[1]);
@@ -1483,7 +1483,7 @@ bot.action("favorites_info", async (ctx) => {
 
 // Обработчик ингредиентов из избранного
 bot.action(/^favorite_ingredients_(\d+)$/, async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Загрузка...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   const favoriteId = parseInt(ctx.match[1]);
@@ -1615,7 +1615,7 @@ bot.action(/^favorite_step_by_step_(\d+)$/, async (ctx) => {
 
 // Обработчик возврата на главную
 bot.action("back_to_main", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  await ctx.answerCbQuery("⏳ Загрузка...", { show_alert: false }); // Показываем индикатор загрузки
 
   const chatId = ctx.chat.id;
   await setUserState(chatId, 0);

@@ -342,18 +342,56 @@ app.post('/parse/search', async (req, res) => {
       return res.status(404).json({ error: `По запросу "${trimmedQuery}" ничего не найдено. Попробуйте другой запрос.` });
     }
 
-    const randomCard = Math.floor(Math.random() * cards.length);
-    const card = $(cards[randomCard]);
+    // Функция для проверки, является ли URL рецептом
+    const isRecipeUrl = (url) => {
+      if (!url || typeof url !== 'string') return false;
+      return url.includes('/cooking/') &&
+             !url.includes('/vacancies') &&
+             !url.includes('/about') &&
+             !url.includes('/contacts') &&
+             !url.includes('/privacy') &&
+             !url.includes('/terms');
+    };
 
-    const href = "https://1000.menu" + card.find(".info-preview > a.h5").attr("href");
-    const title = card.find(".info-preview > a.h5").text();
-    const description = card.find(".info-preview > div.preview-text").text();
-    const time = card.find(".info-preview .level-right > span").text();
-    const ccal = card.find(".info-preview .level-left > span").text();
+    // Пытаемся найти рецепт, перебирая карточки в случайном порядке
+    const cardIndices = Array.from({ length: cards.length }, (_, i) => i);
+    // Перемешиваем индексы для случайного выбора
+    for (let i = cardIndices.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [cardIndices[i], cardIndices[j]] = [cardIndices[j], cardIndices[i]];
+    }
 
-    // Проверяем, что данные валидны
-    if (!title || title.trim() === '') {
-      // Если данные пустые, возвращаем ошибку
+    let card = null;
+    let href = null;
+    let title = null;
+    let description = null;
+    let time = null;
+    let ccal = null;
+
+    // Ищем первую карточку, которая является рецептом
+    for (const cardIndex of cardIndices) {
+      const currentCard = $(cards[cardIndex]);
+      const currentHref = "https://1000.menu" + currentCard.find(".info-preview > a.h5").attr("href");
+
+      // Проверяем, является ли это рецептом
+      if (isRecipeUrl(currentHref)) {
+        card = currentCard;
+        href = currentHref;
+        title = card.find(".info-preview > a.h5").text();
+        description = card.find(".info-preview > div.preview-text").text();
+        time = card.find(".info-preview .level-right > span").text();
+        ccal = card.find(".info-preview .level-left > span").text();
+
+        // Проверяем, что данные валидны
+        if (title && title.trim() !== '') {
+          break; // Нашли валидный рецепт
+        }
+      }
+    }
+
+    // Если не нашли рецепт, возвращаем ошибку
+    if (!card || !href || !title || title.trim() === '') {
+      console.log(`⚠️ Не найдено рецептов среди ${cards.length} карточек для запроса "${trimmedQuery}"`);
       return res.status(404).json({ error: `К сожалению, не удалось найти подходящее блюдо по запросу "${trimmedQuery}". Попробуйте другой запрос.` });
     }
 

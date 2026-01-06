@@ -41,11 +41,8 @@ export const getDetailedMenuKeyboard = (recipeRequested = false, hasHistory = fa
     }
   }
 
-  // Кнопки "Вернуться на главную" и "Закрыть" в одной строке
-  buttons.push([
-    Markup.button.callback("Вернуться на главную↩️", "back_to_main"),
-    Markup.button.callback("Закрыть❌", "close_menu")
-  ]);
+  // Кнопка "Вернуться на главную" на всю ширину
+  buttons.push([Markup.button.callback("Вернуться на главную↩️", "back_to_main")]);
 
   return Markup.inlineKeyboard(buttons);
 };
@@ -94,10 +91,7 @@ export const getFavoriteRecipeKeyboard = (favoriteId) => {
     [Markup.button.callback("Пошаговый рецепт📖", `favorite_step_by_step_${favoriteId}`)],
     [Markup.button.callback("❌ Удалить из избранного", `remove_favorite_${favoriteId}`)],
     [Markup.button.callback("◀️ Вернуться к списку", "favorites_list")],
-    [
-      Markup.button.callback("Вернуться на главную↩️", "back_to_main"),
-      Markup.button.callback("Закрыть❌", "close_menu")
-    ]
+    [Markup.button.callback("Вернуться на главную↩️", "back_to_main")]
   ]);
 };
 

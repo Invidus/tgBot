@@ -35,7 +35,7 @@ export const getDetailedMenuKeyboard = (recipeRequested = false, hasHistory = fa
     // Если рецепт еще не был запрошен, показываем кнопки в одной строке
     if (!recipeRequested) {
       buttons.push([
-        Markup.button.callback("Пошаговый рецепт📖", "step_by_step"),
+        Markup.button.callback("Как приготовить📖", "step_by_step"),
         Markup.button.callback("Ингредиенты и БЖУ🔎", "ingredients")
       ]);
     }
@@ -88,7 +88,7 @@ export const getFavoritesKeyboard = (favorites, currentPage = 0, pageSize = 5) =
 export const getFavoriteRecipeKeyboard = (favoriteId) => {
   return Markup.inlineKeyboard([
     [Markup.button.callback("Ингредиенты и БЖУ🔎", `favorite_ingredients_${favoriteId}`)],
-    [Markup.button.callback("Пошаговый рецепт📖", `favorite_step_by_step_${favoriteId}`)],
+    [Markup.button.callback("Как приготовить📖", `favorite_step_by_step_${favoriteId}`)],
     [Markup.button.callback("❌ Удалить из избранного", `remove_favorite_${favoriteId}`)],
     [Markup.button.callback("◀️ Вернуться к списку", "favorites_list")],
     [Markup.button.callback("Вернуться на главную↩️", "back_to_main")]

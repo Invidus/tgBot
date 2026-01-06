@@ -328,7 +328,7 @@ bot.start(async (ctx) => {
 
 // Обработчик выбора завтрака
 bot.action("breakfast", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   await setUserState(chatId, 1);
@@ -352,15 +352,18 @@ bot.action("breakfast", async (ctx) => {
     } else {
       await ctx.reply(recipeText, keyboard);
     }
+    // Убираем индикатор загрузки после успешной отправки
+    await ctx.answerCbQuery().catch(() => {});
   } catch (error) {
     console.error('Ошибка в breakfast:', error);
+    await ctx.answerCbQuery("❌ Ошибка при получении рецепта").catch(() => {});
     await ctx.reply("❌ Ошибка при получении рецепта. Попробуйте позже.");
   }
 });
 
 // Обработчик выбора обеда
 bot.action("dinner", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   await setUserState(chatId, 2);
@@ -396,15 +399,18 @@ bot.action("dinner", async (ctx) => {
     } else {
       await ctx.reply(recipeText, keyboard);
     }
+    // Убираем индикатор загрузки после успешной отправки
+    await ctx.answerCbQuery().catch(() => {});
   } catch (error) {
     console.error('Ошибка в dinner:', error);
+    await ctx.answerCbQuery("❌ Ошибка при получении рецепта").catch(() => {});
     await ctx.reply("❌ Ошибка при получении рецепта. Попробуйте позже.");
   }
 });
 
 // Обработчик выбора ужина
 bot.action("lunch", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   await setUserState(chatId, 3);
@@ -440,8 +446,11 @@ bot.action("lunch", async (ctx) => {
     } else {
       await ctx.reply(recipeText, keyboard);
     }
+    // Убираем индикатор загрузки после успешной отправки
+    await ctx.answerCbQuery().catch(() => {});
   } catch (error) {
     console.error('Ошибка в lunch:', error);
+    await ctx.answerCbQuery("❌ Ошибка при получении рецепта").catch(() => {});
     await ctx.reply("❌ Ошибка при получении рецепта. Попробуйте позже.");
   }
 });
@@ -462,7 +471,7 @@ bot.action("ingredients_disabled", async (ctx) => {
 
 // Обработчик получения полного рецепта (Ингредиенты)
 bot.action("ingredients", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   const state = await getUserState(chatId);
@@ -529,6 +538,8 @@ bot.action("ingredients", async (ctx) => {
         keyboard
       );
     }
+    // Убираем индикатор загрузки после успешного обновления
+    await ctx.answerCbQuery().catch(() => {});
   } catch (error) {
     console.error('Ошибка в ingredients:', error);
     try {
@@ -546,7 +557,7 @@ bot.action("ingredients", async (ctx) => {
 
 // Обработчик добавления в избранное
 bot.action("add_to_favorites", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   const state = await getUserState(chatId);
@@ -641,7 +652,7 @@ bot.action("add_to_favorites", async (ctx) => {
 
 // Обработчик удаления из избранного
 bot.action("remove_from_favorites", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   const state = await getUserState(chatId);
@@ -699,6 +710,8 @@ bot.action("remove_from_favorites", async (ctx) => {
         keyboard
       );
     }
+    // Убираем индикатор загрузки после успешного обновления
+    await ctx.answerCbQuery().catch(() => {});
   } catch (e) {
     // Игнорируем ошибки редактирования
   }
@@ -706,7 +719,7 @@ bot.action("remove_from_favorites", async (ctx) => {
 
 // Обработчик "Другое блюдо"
 bot.action("another_dish", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   const state = await getUserState(chatId);
@@ -790,6 +803,8 @@ bot.action("another_dish", async (ctx) => {
             keyboard
           );
         }
+        // Убираем индикатор загрузки после успешного обновления
+        await ctx.answerCbQuery().catch(() => {});
       } catch (editError) {
         // Игнорируем ошибку "message is not modified" - это не критично
         if (editError.response?.error_code === 400 &&
@@ -810,6 +825,8 @@ bot.action("another_dish", async (ctx) => {
       } else {
         await ctx.reply(recipeText, keyboard);
       }
+      // Убираем индикатор загрузки после успешной отправки
+      await ctx.answerCbQuery().catch(() => {});
     }
   } catch (error) {
     console.error('Ошибка в another_dish:', error);
@@ -839,7 +856,7 @@ bot.action("another_dish", async (ctx) => {
 // Обработчик возврата к предыдущему рецепту (пока упрощенный)
 // Обработчик возврата к предыдущему рецепту
 bot.action("previous_recipe", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   const state = await getUserState(chatId);
@@ -927,6 +944,8 @@ bot.action("previous_recipe", async (ctx) => {
         await ctx.reply(recipeText, keyboard);
       }
     }
+    // Убираем индикатор загрузки после успешного обновления
+    await ctx.answerCbQuery().catch(() => {});
   } catch (error) {
     console.error('Ошибка при возврате к предыдущему рецепту:', error);
     await ctx.answerCbQuery("Ошибка при возврате к предыдущему рецепту.");
@@ -1294,7 +1313,7 @@ bot.action("step_info", async (ctx) => {
 
 // Обработчик списка избранного
 bot.action("favorites_list", async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   const favorites = await getFavoritesFromDB(chatId, 0, 50);
@@ -1307,6 +1326,7 @@ bot.action("favorites_list", async (ctx) => {
         ]
       }
     });
+    await ctx.answerCbQuery().catch(() => {});
     return;
   }
 
@@ -1321,11 +1341,13 @@ bot.action("favorites_list", async (ctx) => {
   }
 
   await ctx.reply(validateAndTruncateMessage(message), keyboard);
+  // Убираем индикатор загрузки после успешной отправки
+  await ctx.answerCbQuery().catch(() => {});
 });
 
 // Обработчик просмотра рецепта из избранного
 bot.action(/^favorite_(\d+)$/, async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   const favoriteId = parseInt(ctx.match[1]);
@@ -1357,6 +1379,8 @@ bot.action(/^favorite_(\d+)$/, async (ctx) => {
     } else {
       await ctx.reply(recipeText, keyboard);
     }
+    // Убираем индикатор загрузки после успешной отправки
+    await ctx.answerCbQuery().catch(() => {});
   } catch (error) {
     console.error('Ошибка получения рецепта из избранного:', error);
     await ctx.answerCbQuery("❌ Ошибка при загрузке рецепта");
@@ -1365,7 +1389,7 @@ bot.action(/^favorite_(\d+)$/, async (ctx) => {
 
 // Обработчик удаления из избранного из списка
 bot.action(/^remove_favorite_(\d+)$/, async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   const favoriteId = parseInt(ctx.match[1]);
@@ -1376,8 +1400,6 @@ bot.action(/^remove_favorite_(\d+)$/, async (ctx) => {
     });
 
     if (response.data && response.data.removed) {
-      await ctx.answerCbQuery("❌ Удалено из избранного");
-
       // Обновляем список избранного
       const favorites = await getFavoritesFromDB(chatId, 0, 50);
 
@@ -1395,6 +1417,7 @@ bot.action(/^remove_favorite_(\d+)$/, async (ctx) => {
             }
           }
         );
+        await ctx.answerCbQuery("❌ Удалено из избранного");
         return;
       }
 
@@ -1415,6 +1438,7 @@ bot.action(/^remove_favorite_(\d+)$/, async (ctx) => {
         validateAndTruncateMessage(message),
         keyboard
       );
+      await ctx.answerCbQuery("❌ Удалено из избранного");
     } else {
       await ctx.answerCbQuery("❌ Не удалось удалить из избранного");
     }
@@ -1426,7 +1450,7 @@ bot.action(/^remove_favorite_(\d+)$/, async (ctx) => {
 
 // Обработчик пагинации избранного
 bot.action(/^favorites_page_(\d+)$/, async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   const page = parseInt(ctx.match[1]);
@@ -1470,6 +1494,8 @@ bot.action(/^favorites_page_(\d+)$/, async (ctx) => {
       validateAndTruncateMessage(message),
       keyboard
     );
+    // Убираем индикатор загрузки после успешного обновления
+    await ctx.answerCbQuery().catch(() => {});
   } catch (error) {
     console.error('Ошибка пагинации избранного:', error);
     await ctx.answerCbQuery("❌ Ошибка при загрузке страницы");
@@ -1483,7 +1509,7 @@ bot.action("favorites_info", async (ctx) => {
 
 // Обработчик ингредиентов из избранного
 bot.action(/^favorite_ingredients_(\d+)$/, async (ctx) => {
-  await ctx.answerCbQuery(); // Сразу убираем загрузку
+  // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   const favoriteId = parseInt(ctx.match[1]);
@@ -1537,6 +1563,8 @@ bot.action(/^favorite_ingredients_(\d+)$/, async (ctx) => {
     } else {
       await ctx.reply(recipeText, keyboard);
     }
+    // Убираем индикатор загрузки после успешного обновления
+    await ctx.answerCbQuery().catch(() => {});
   } catch (error) {
     console.error('Ошибка получения ингредиентов из избранного:', error);
     await ctx.answerCbQuery("❌ Ошибка при загрузке рецепта");

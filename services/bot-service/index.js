@@ -1301,25 +1301,45 @@ bot.action("step_back", async (ctx) => {
       }
 
       if (recipeData.hasPhoto && recipeData.dishPhotoFileId) {
-        await ctx.telegram.editMessageMedia(
-          chatId,
-          recipeData.dishMessageId,
-          null,
-          {
-            type: 'photo',
-            media: recipeData.dishPhotoFileId,
-            caption: recipeData.dishMessageText
-          },
-          { reply_markup: keyboard.reply_markup }
-        );
+        try {
+          await ctx.telegram.editMessageMedia(
+            chatId,
+            recipeData.dishMessageId,
+            null,
+            {
+              type: 'photo',
+              media: recipeData.dishPhotoFileId,
+              caption: recipeData.dishMessageText
+            },
+            { reply_markup: keyboard.reply_markup }
+          );
+        } catch (editError) {
+          // Игнорируем ошибку "message is not modified" - это нормально
+          if (editError.response?.error_code === 400 &&
+              editError.response?.description?.includes('message is not modified')) {
+            // Сообщение уже имеет правильное содержимое, это нормально
+          } else {
+            throw editError;
+          }
+        }
       } else {
-        await ctx.telegram.editMessageText(
-          chatId,
-          recipeData.dishMessageId,
-          null,
-          recipeData.dishMessageText,
-          keyboard
-        );
+        try {
+          await ctx.telegram.editMessageText(
+            chatId,
+            recipeData.dishMessageId,
+            null,
+            recipeData.dishMessageText,
+            keyboard
+          );
+        } catch (editError) {
+          // Игнорируем ошибку "message is not modified" - это нормально
+          if (editError.response?.error_code === 400 &&
+              editError.response?.description?.includes('message is not modified')) {
+            // Сообщение уже имеет правильное содержимое, это нормально
+          } else {
+            throw editError;
+          }
+        }
       }
       // Убираем индикатор загрузки после успешного восстановления
       await ctx.answerCbQuery().catch(() => {});

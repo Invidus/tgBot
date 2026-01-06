@@ -1279,12 +1279,21 @@ bot.action("step_back", async (ctx) => {
 
       const isRecipe = url ? isRecipeUrl(url) : true; // По умолчанию считаем рецептом, если URL есть
 
+      // При возврате из пошагового рецепта всегда показываем все кнопки (recipeRequested = false)
+      // чтобы пользователь мог снова выбрать "Пошаговый рецепт" или "Ингредиенты"
+      recipeRequested = false;
+
       // Если это рецепт из избранного, используем специальную клавиатуру
       let keyboard;
       if (recipeData.favoriteId) {
         keyboard = getFavoriteRecipeKeyboard(recipeData.favoriteId);
       } else {
         keyboard = getDetailedMenuKeyboard(recipeRequested, hasHistory, isInFav, isRecipe);
+      }
+
+      // Также сбрасываем флаг recipeRequested в Redis
+      if (dishType) {
+        await setRecipeRequested(chatId, dishType, false);
       }
 
       if (recipeData.hasPhoto && recipeData.dishPhotoFileId) {
@@ -1311,12 +1320,11 @@ bot.action("step_back", async (ctx) => {
       // Убираем индикатор загрузки после успешного восстановления
       await ctx.answerCbQuery().catch(() => {});
     } catch (e) {
-      // Если не удалось отредактировать, отправляем новое
-      const hasHistory = await hasRecipeHistory(chatId, 'breakfast');
-      const url = await getUserHref(chatId, 'breakfast');
-      const isRecipe = url ? isRecipeUrl(url) : true;
-      await ctx.reply(recipeData.dishMessageText, getDetailedMenuKeyboard(false, hasHistory, false, isRecipe));
-      // Убираем индикатор загрузки после отправки нового сообщения
+      console.error('Ошибка при восстановлении исходного сообщения:', e);
+      // Если не удалось отредактировать исходное сообщение,
+      // это значит, что оно было удалено или изменено
+      // В этом случае не создаем новое сообщение, чтобы не было дублей
+      // Просто убираем индикатор загрузки
       await ctx.answerCbQuery().catch(() => {});
     }
   } else {

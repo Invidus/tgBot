@@ -946,6 +946,24 @@ bot.action("favorites_list", async (ctx) => {
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
 
+    // Проверка лимита запросов - блокируем избранное если нет запросов
+    const limitCheck = await checkRequestLimit(chatId);
+    if (!limitCheck.allowed) {
+        await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
+        await ctx.reply(
+            `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+            `💡 Для получения подписки обратитесь к администратору.`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+                    ]
+                }
+            }
+        );
+        return;
+    }
+
     await ctx.answerCbQuery("Загрузка избранного...");
 
     try {
@@ -1013,6 +1031,24 @@ bot.action(/^favorite_(\d+)$/, async (ctx) => {
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
     const favoriteId = parseInt(ctx.match[1]);
+
+    // Проверка лимита запросов - блокируем просмотр избранного если нет запросов
+    const limitCheck = await checkRequestLimit(chatId);
+    if (!limitCheck.allowed) {
+        await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
+        await ctx.reply(
+            `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+            `💡 Для получения подписки обратитесь к администратору.`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+                    ]
+                }
+            }
+        );
+        return;
+    }
 
     await ctx.answerCbQuery("Загрузка рецепта...");
 
@@ -1160,6 +1196,24 @@ bot.action(/^favorite_ingredients_(\d+)$/, async (ctx) => {
     updateUserActivity(chatId);
     const favoriteId = parseInt(ctx.match[1]);
 
+    // Проверка лимита запросов ПЕРЕД выполнением
+    const limitCheck = await checkRequestLimit(chatId);
+    if (!limitCheck.allowed) {
+        await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
+        await ctx.reply(
+            `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+            `💡 Для получения подписки обратитесь к администратору.`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+                    ]
+                }
+            }
+        );
+        return;
+    }
+
     // Проверка rate limit
     if (!checkRateLimit(chatId)) {
         await ctx.answerCbQuery("Слишком много запросов. Подождите минуту и попробуйте снова.");
@@ -1204,6 +1258,15 @@ bot.action(/^favorite_ingredients_(\d+)$/, async (ctx) => {
         let loadingMessage = await ctx.reply("⏳ Загрузка рецепта...");
 
         await getFullRecepieFunc(ctx, userHrefs, loadingMessage);
+
+        // Уменьшаем счетчик бесплатных запросов, если нет подписки
+        if (!limitCheck.hasSubscription) {
+            try {
+                await decrementFreeRequests(chatId);
+            } catch (error) {
+                console.error('Ошибка при уменьшении счетчика запросов:', error);
+            }
+        }
     } catch (error) {
         console.error('Ошибка получения ингредиентов из избранного:', error);
         await ctx.answerCbQuery("❌ Ошибка при загрузке рецепта");
@@ -1215,6 +1278,24 @@ bot.action(/^favorite_step_by_step_(\d+)$/, async (ctx) => {
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
     const favoriteId = parseInt(ctx.match[1]);
+
+    // Проверка лимита запросов ПЕРЕД выполнением
+    const limitCheck = await checkRequestLimit(chatId);
+    if (!limitCheck.allowed) {
+        await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
+        await ctx.reply(
+            `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+            `💡 Для получения подписки обратитесь к администратору.`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+                    ]
+                }
+            }
+        );
+        return;
+    }
 
     // Проверка rate limit
     if (!checkRateLimit(chatId)) {
@@ -1233,6 +1314,15 @@ bot.action(/^favorite_step_by_step_(\d+)$/, async (ctx) => {
         let loadingMessage = await ctx.reply("⏳ Загрузка пошагового рецепта...");
 
         const steps = await getStepByStepRecipe(favorite.recipe_url);
+
+        // Уменьшаем счетчик бесплатных запросов, если нет подписки
+        if (!limitCheck.hasSubscription) {
+            try {
+                await decrementFreeRequests(chatId);
+            } catch (error) {
+                console.error('Ошибка при уменьшении счетчика запросов:', error);
+            }
+        }
 
         if (!steps || steps.length === 0) {
             if (loadingMessage) {
@@ -1278,6 +1368,24 @@ bot.action("ingredients", async (ctx) => {
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
 
+    // Проверка лимита запросов ПЕРЕД выполнением
+    const limitCheck = await checkRequestLimit(chatId);
+    if (!limitCheck.allowed) {
+        await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
+        await ctx.reply(
+            `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+            `💡 Для получения подписки обратитесь к администратору.`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+                    ]
+                }
+            }
+        );
+        return;
+    }
+
     // Проверка rate limit
     if (!checkRateLimit(chatId)) {
         await ctx.answerCbQuery("Слишком много запросов. Подождите минуту и попробуйте снова.");
@@ -1319,18 +1427,50 @@ bot.action("ingredients", async (ctx) => {
             case 1:
                 await getFullRecepie(ctx, userHrefs, loadingMessage);
                 setRecipeRequested(chatId, 'breakfast');
+                // Уменьшаем счетчик бесплатных запросов, если нет подписки
+                if (!limitCheck.hasSubscription) {
+                    try {
+                        await decrementFreeRequests(chatId);
+                    } catch (error) {
+                        console.error('Ошибка при уменьшении счетчика запросов:', error);
+                    }
+                }
                 break;
             case 2:
                 await getFullRecepieDinner(ctx, userHrefs, loadingMessage);
                 setRecipeRequested(chatId, 'dinner');
+                // Уменьшаем счетчик бесплатных запросов, если нет подписки
+                if (!limitCheck.hasSubscription) {
+                    try {
+                        await decrementFreeRequests(chatId);
+                    } catch (error) {
+                        console.error('Ошибка при уменьшении счетчика запросов:', error);
+                    }
+                }
                 break;
             case 3:
                 await getFullRecepieLunch(ctx, userHrefs, loadingMessage);
                 setRecipeRequested(chatId, 'lunch');
+                // Уменьшаем счетчик бесплатных запросов, если нет подписки
+                if (!limitCheck.hasSubscription) {
+                    try {
+                        await decrementFreeRequests(chatId);
+                    } catch (error) {
+                        console.error('Ошибка при уменьшении счетчика запросов:', error);
+                    }
+                }
                 break;
             case 4:
                 await getFullRecepieSearch(ctx, userHrefs, loadingMessage);
                 setRecipeRequested(chatId, 'search');
+                // Уменьшаем счетчик бесплатных запросов, если нет подписки
+                if (!limitCheck.hasSubscription) {
+                    try {
+                        await decrementFreeRequests(chatId);
+                    } catch (error) {
+                        console.error('Ошибка при уменьшении счетчика запросов:', error);
+                    }
+                }
                 break;
             default:
                 // Удаляем сообщение о загрузке, если оно было отправлено
@@ -1371,6 +1511,24 @@ bot.action("ingredients_disabled", async (ctx) => {
 bot.action("step_by_step", async (ctx) => {
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
+
+    // Проверка лимита запросов ПЕРЕД выполнением
+    const limitCheck = await checkRequestLimit(chatId);
+    if (!limitCheck.allowed) {
+        await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
+        await ctx.reply(
+            `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+            `💡 Для получения подписки обратитесь к администратору.`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+                    ]
+                }
+            }
+        );
+        return;
+    }
 
     // Проверка rate limit
     if (!checkRateLimit(chatId)) {
@@ -1428,6 +1586,24 @@ bot.action("step_by_step", async (ctx) => {
     try {
         // Получаем пошаговый рецепт
         const steps = await getStepByStepRecipe(hrefOnProduct);
+
+        // Уменьшаем счетчик бесплатных запросов, если нет подписки
+        if (!limitCheck.hasSubscription) {
+            try {
+                await decrementFreeRequests(chatId);
+            } catch (error) {
+                console.error('Ошибка при уменьшении счетчика запросов:', error);
+            }
+        }
+
+        // Уменьшаем счетчик бесплатных запросов, если нет подписки
+        if (!limitCheck.hasSubscription) {
+            try {
+                await decrementFreeRequests(chatId);
+            } catch (error) {
+                console.error('Ошибка при уменьшении счетчика запросов:', error);
+            }
+        }
 
         if (!steps || steps.length === 0) {
             // Удаляем сообщение о загрузке

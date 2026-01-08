@@ -139,6 +139,32 @@ const initTables = async () => {
       ON payments(status)
     `);
     console.log('✅ Индексы для payments созданы');
+
+    // Создаем таблицу пользователей
+    console.log('🔄 Создание таблицы users...');
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        chat_id BIGINT NOT NULL UNIQUE,
+        username VARCHAR(255),
+        free_requests INTEGER DEFAULT 0,
+        subscription_end_date TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Таблица users создана или уже существует');
+
+    // Создаем индексы для users
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_users_chat_id
+      ON users(chat_id)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_users_username
+      ON users(username)
+    `);
+    console.log('✅ Индексы для users созданы');
   } catch (error) {
     console.error('❌ Ошибка инициализации таблиц:', error);
     throw error;
@@ -577,6 +603,271 @@ app.get('/payments', async (req, res) => {
     res.json({ payments: result.rows });
   } catch (error) {
     console.error('Ошибка получения платежей:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// ==================== ПОЛЬЗОВАТЕЛИ (для админ-панели) ====================
+
+// Получение или создание пользователя
+app.post('/users', async (req, res) => {
+  const { chatId, username } = req.body;
+
+  if (!chatId) {
+    return res.status(400).json({ error: 'Не указан chatId' });
+  }
+
+  try {
+    // Проверяем, существует ли пользователь
+    const existingUser = await pool.query(
+      'SELECT * FROM users WHERE chat_id = $1',
+      [chatId]
+    );
+
+    if (existingUser.rows.length > 0) {
+      // Обновляем username, если он изменился
+      if (username && existingUser.rows[0].username !== username) {
+        const updated = await pool.query(
+          'UPDATE users SET username = $1, updated_at = CURRENT_TIMESTAMP WHERE chat_id = $2 RETURNING *',
+          [username, chatId]
+        );
+        return res.json({ user: updated.rows[0] });
+      }
+      return res.json({ user: existingUser.rows[0] });
+    }
+
+    // Создаем нового пользователя
+    const result = await pool.query(
+      `INSERT INTO users (chat_id, username, free_requests)
+       VALUES ($1, $2, 0)
+       RETURNING *`,
+      [chatId, username || null]
+    );
+
+    res.json({ user: result.rows[0] });
+  } catch (error) {
+    console.error('Ошибка получения/создания пользователя:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Получение пользователя по chat_id
+app.get('/users/chat/:chatId', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM users WHERE chat_id = $1',
+      [req.params.chatId]
+    );
+    res.json({ user: result.rows[0] || null });
+  } catch (error) {
+    console.error('Ошибка получения пользователя:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Получение пользователя по username
+app.get('/users/username/:username', async (req, res) => {
+  try {
+    const cleanUsername = req.params.username.replace('@', '');
+    const result = await pool.query(
+      'SELECT * FROM users WHERE LOWER(username) = LOWER($1)',
+      [cleanUsername]
+    );
+    res.json({ user: result.rows[0] || null });
+  } catch (error) {
+    console.error('Ошибка получения пользователя по username:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Установка количества бесплатных запросов
+app.put('/users/:chatId/free-requests', async (req, res) => {
+  const { chatId } = req.params;
+  const { count } = req.body;
+
+  if (typeof count !== 'number' || count < 0) {
+    return res.status(400).json({ error: 'Неверное количество запросов' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE users
+       SET free_requests = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE chat_id = $2
+       RETURNING *`,
+      [count, chatId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    res.json({ user: result.rows[0] });
+  } catch (error) {
+    console.error('Ошибка установки бесплатных запросов:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Установка бесплатных запросов по username
+app.put('/users/username/:username/free-requests', async (req, res) => {
+  const { username } = req.params;
+  const { count } = req.body;
+
+  if (typeof count !== 'number' || count < 0) {
+    return res.status(400).json({ error: 'Неверное количество запросов' });
+  }
+
+  try {
+    const cleanUsername = username.replace('@', '');
+    const result = await pool.query(
+      `UPDATE users
+       SET free_requests = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE LOWER(username) = LOWER($2)
+       RETURNING *`,
+      [count, cleanUsername]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    res.json({ user: result.rows[0] });
+  } catch (error) {
+    console.error('Ошибка установки бесплатных запросов по username:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Уменьшение счетчика бесплатных запросов
+app.post('/users/:chatId/free-requests/decrement', async (req, res) => {
+  const { chatId } = req.params;
+
+  try {
+    const result = await pool.query(
+      `UPDATE users
+       SET free_requests = GREATEST(0, free_requests - 1), updated_at = CURRENT_TIMESTAMP
+       WHERE chat_id = $1
+       RETURNING *`,
+      [chatId]
+    );
+
+    if (result.rows.length === 0) {
+      // Создаем пользователя если его нет
+      const newUser = await pool.query(
+        `INSERT INTO users (chat_id, free_requests)
+         VALUES ($1, 0)
+         RETURNING *`,
+        [chatId]
+      );
+      return res.json({ user: newUser.rows[0] });
+    }
+
+    res.json({ user: result.rows[0] });
+  } catch (error) {
+    console.error('Ошибка уменьшения счетчика запросов:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Установка подписки для пользователя (дни)
+app.put('/users/:chatId/subscription', async (req, res) => {
+  const { chatId } = req.params;
+  const { days } = req.body;
+
+  if (typeof days !== 'number' || days <= 0) {
+    return res.status(400).json({ error: 'Неверное количество дней' });
+  }
+
+  try {
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + days);
+
+    const result = await pool.query(
+      `UPDATE users
+       SET subscription_end_date = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE chat_id = $2
+       RETURNING *`,
+      [endDate, chatId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    res.json({ user: result.rows[0] });
+  } catch (error) {
+    console.error('Ошибка установки подписки:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Установка подписки для пользователя по username
+app.put('/users/username/:username/subscription', async (req, res) => {
+  const { username } = req.params;
+  const { days } = req.body;
+
+  if (typeof days !== 'number' || days <= 0) {
+    return res.status(400).json({ error: 'Неверное количество дней' });
+  }
+
+  try {
+    const cleanUsername = username.replace('@', '');
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + days);
+
+    const result = await pool.query(
+      `UPDATE users
+       SET subscription_end_date = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE LOWER(username) = LOWER($2)
+       RETURNING *`,
+      [endDate, cleanUsername]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    res.json({ user: result.rows[0] });
+  } catch (error) {
+    console.error('Ошибка установки подписки по username:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Получение информации о пользователе для админ-панели
+app.get('/users/username/:username/info', async (req, res) => {
+  try {
+    const cleanUsername = req.params.username.replace('@', '');
+    const result = await pool.query(
+      'SELECT * FROM users WHERE LOWER(username) = LOWER($1)',
+      [cleanUsername]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({ userInfo: null });
+    }
+
+    const user = result.rows[0];
+    const now = new Date();
+    const hasSubscription = user.subscription_end_date && new Date(user.subscription_end_date) > now;
+    const daysLeft = hasSubscription
+      ? Math.ceil((new Date(user.subscription_end_date) - now) / (1000 * 60 * 60 * 24))
+      : 0;
+
+    res.json({
+      userInfo: {
+        chatId: user.chat_id,
+        username: user.username,
+        freeRequests: user.free_requests || 0,
+        hasSubscription,
+        subscriptionEndDate: user.subscription_end_date,
+        daysLeft,
+        createdAt: user.created_at
+      }
+    });
+  } catch (error) {
+    console.error('Ошибка получения информации о пользователе:', error);
     res.status(500).json({ error: 'Ошибка БД' });
   }
 });

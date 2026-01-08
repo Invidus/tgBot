@@ -6,6 +6,16 @@ import Redis from "ioredis";
 import axios from "axios";
 import { createPayment, getPayment, parseWebhookEvent } from "./yookassa.js";
 import { randomUUID } from "node:crypto";
+import {
+  isAdmin,
+  getAdminMainKeyboard,
+  handleGetUserInfo,
+  handleSetFreeRequests,
+  handleSetSubscription,
+  processGetUserInfo,
+  processSetFreeRequests,
+  processSetSubscription
+} from "./adminPanel.js";
 
 const bot = new Telegraf(config.telegramToken);
 const redis = new Redis({
@@ -328,59 +338,84 @@ const hasActiveSubscription = async (chatId) => {
   return endDate > now && subscription.is_active;
 };
 
-// Получение счетчика запросов пользователя
-const getRequestCount = async (chatId) => {
+// Получение или создание пользователя
+const getOrCreateUser = async (chatId, username = null) => {
   try {
-    const response = await axios.get(`${databaseServiceUrl}/request-counts/${chatId}`, {
-      timeout: 10000
-    });
-    return response.data.requestCount || { request_count: 0 };
-  } catch (error) {
-    console.error('Ошибка получения счетчика запросов:', error.message);
-    return { request_count: 0 };
-  }
-};
-
-// Увеличение счетчика запросов
-const incrementRequestCount = async (chatId) => {
-  try {
-    console.log(`📊 Увеличение счетчика запросов для chatId=${chatId}`);
-    const response = await axios.post(`${databaseServiceUrl}/request-counts/${chatId}/increment`, {}, {
+    const response = await axios.post(`${databaseServiceUrl}/users`, {
+      chatId,
+      username
+    }, {
       timeout: 10000,
       headers: { 'Content-Type': 'application/json' }
     });
-    const result = response.data.requestCount || { request_count: 0 };
-    console.log(`✅ Счетчик успешно увеличен для chatId=${chatId}, новое значение: ${result.request_count}`);
-    return result;
+    return response.data.user;
   } catch (error) {
-    console.error(`❌ Ошибка увеличения счетчика запросов для chatId=${chatId}:`, error.response?.data || error.message);
-    throw error; // Пробрасываем ошибку дальше, чтобы обработчики могли её обработать
+    console.error('Ошибка получения/создания пользователя:', error.message);
+    return null;
+  }
+};
+
+// Получение пользователя по chat_id
+const getUserByChatId = async (chatId) => {
+  try {
+    const response = await axios.get(`${databaseServiceUrl}/users/chat/${chatId}`, {
+      timeout: 10000
+    });
+    return response.data.user || null;
+  } catch (error) {
+    console.error('Ошибка получения пользователя:', error.message);
+    return null;
+  }
+};
+
+// Уменьшение счетчика бесплатных запросов
+const decrementFreeRequests = async (chatId) => {
+  try {
+    const response = await axios.post(`${databaseServiceUrl}/users/${chatId}/free-requests/decrement`, {}, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    });
+    return response.data.user;
+  } catch (error) {
+    console.error('Ошибка уменьшения счетчика запросов:', error.message);
+    throw error;
   }
 };
 
 // Проверка лимита запросов перед выполнением действия
 const checkRequestLimit = async (chatId) => {
-  const hasSubscription = await hasActiveSubscription(chatId);
+  // Проверяем подписку из таблицы users
+  const user = await getUserByChatId(chatId);
+
+  // Проверяем подписку в таблице users
+  let hasSubscription = false;
+  if (user && user.subscription_end_date) {
+    const endDate = new Date(user.subscription_end_date);
+    hasSubscription = endDate > new Date();
+  }
+
+  // Если нет подписки в users, проверяем таблицу subscriptions
+  if (!hasSubscription) {
+    hasSubscription = await hasActiveSubscription(chatId);
+  }
 
   // Если есть активная подписка, лимит не применяется
   if (hasSubscription) {
     console.log(`✅ Проверка лимита для chatId=${chatId}: есть активная подписка, лимит не применяется`);
-    return { allowed: true, remaining: Infinity };
+    return { allowed: true, remaining: Infinity, hasSubscription: true };
   }
 
-  // Для бесплатных пользователей проверяем лимит
-  const requestCount = await getRequestCount(chatId);
-  const currentCount = requestCount.request_count || 0;
-  const remaining = FREE_REQUESTS_LIMIT - currentCount;
+  // Для бесплатных пользователей проверяем лимит из таблицы users
+  const freeRequests = user?.free_requests || 0;
 
-  console.log(`📊 Проверка лимита для chatId=${chatId}: использовано ${currentCount}/${FREE_REQUESTS_LIMIT}, осталось ${remaining}`);
+  console.log(`📊 Проверка лимита для chatId=${chatId}: бесплатных запросов ${freeRequests}`);
 
-  if (remaining <= 0) {
+  if (freeRequests <= 0) {
     console.log(`❌ Лимит исчерпан для chatId=${chatId}`);
-    return { allowed: false, remaining: 0 };
+    return { allowed: false, remaining: 0, hasSubscription: false };
   }
 
-  return { allowed: true, remaining };
+  return { allowed: true, remaining: freeRequests, hasSubscription: false };
 };
 
 // Создание подписки
@@ -418,7 +453,16 @@ const getExpiringSubscriptions = async (days = 3) => {
 // Обработчик команды /start
 bot.start(async (ctx) => {
   const chatId = ctx.chat.id;
+  const username = ctx.from?.username;
+
   await setUserState(chatId, 0);
+
+  // Создаем или обновляем пользователя в базе
+  try {
+    await getOrCreateUser(chatId, username);
+  } catch (error) {
+    console.error('Ошибка при создании пользователя:', error);
+  }
 
   const favoritesCount = await getFavoritesCount(chatId);
 
@@ -429,14 +473,21 @@ bot.start(async (ctx) => {
   });
 
   // Проверяем подписку для отображения статуса
-  const subscription = await getSubscription(chatId);
-  const hasActiveSub = subscription && new Date(subscription.end_date) > new Date() && subscription.is_active;
-  const requestCount = await getRequestCount(chatId);
-  const remaining = FREE_REQUESTS_LIMIT - (requestCount.request_count || 0);
+  const user = await getUserByChatId(chatId);
+  let hasActiveSub = false;
+  if (user && user.subscription_end_date) {
+    hasActiveSub = new Date(user.subscription_end_date) > new Date();
+  }
+  if (!hasActiveSub) {
+    const subscription = await getSubscription(chatId);
+    hasActiveSub = subscription && new Date(subscription.end_date) > new Date() && subscription.is_active;
+  }
+
+  const freeRequests = user?.free_requests || 0;
 
   let menuText = "Выберите что хотите приготовить или выполните поиск по продукту";
   if (!hasActiveSub) {
-    menuText += `\n\n📊 Бесплатных запросов: ${remaining}/${FREE_REQUESTS_LIMIT}`;
+    menuText += `\n\n📊 Бесплатных запросов: ${freeRequests}`;
   }
 
   const mainMenuKeyboard = {
@@ -456,6 +507,100 @@ bot.start(async (ctx) => {
   });
 });
 
+// Команда для админ-панели
+bot.command("admin", async (ctx) => {
+  const chatId = ctx.chat.id;
+  const username = ctx.from?.username;
+
+  if (!isAdmin(username)) {
+    await ctx.reply("❌ У вас нет доступа к админ-панели.");
+    return;
+  }
+
+  await ctx.reply("🔐 **Админ-панель**\n\nВыберите действие:", {
+    parse_mode: 'Markdown',
+    ...getAdminMainKeyboard()
+  });
+});
+
+// Хранилище состояний админ-панели: chatId -> state
+const adminStates = new Map();
+
+// Функции для работы с состоянием админ-панели
+const getAdminState = (chatId) => {
+  return adminStates.get(chatId) || null;
+};
+
+const setAdminState = (chatId, state) => {
+  if (state) {
+    adminStates.set(chatId, state);
+  } else {
+    adminStates.delete(chatId);
+  }
+};
+
+// Обработчики админ-панели
+bot.action("admin_get_user_info", async (ctx) => {
+  const username = ctx.from?.username;
+  if (!isAdmin(username)) {
+    await ctx.answerCbQuery("❌ У вас нет доступа");
+    return;
+  }
+  const state = await handleGetUserInfo(ctx);
+  if (state) {
+    setAdminState(ctx.chat.id, state);
+  }
+});
+
+bot.action("admin_set_free_requests", async (ctx) => {
+  const username = ctx.from?.username;
+  if (!isAdmin(username)) {
+    await ctx.answerCbQuery("❌ У вас нет доступа");
+    return;
+  }
+  const state = await handleSetFreeRequests(ctx);
+  if (state) {
+    setAdminState(ctx.chat.id, state);
+  }
+});
+
+bot.action("admin_set_subscription", async (ctx) => {
+  const username = ctx.from?.username;
+  if (!isAdmin(username)) {
+    await ctx.answerCbQuery("❌ У вас нет доступа");
+    return;
+  }
+  const state = await handleSetSubscription(ctx);
+  if (state) {
+    setAdminState(ctx.chat.id, state);
+  }
+});
+
+bot.action("admin_close", async (ctx) => {
+  const username = ctx.from?.username;
+  if (!isAdmin(username)) {
+    await ctx.answerCbQuery("❌ У вас нет доступа");
+    return;
+  }
+  await ctx.answerCbQuery();
+  setAdminState(ctx.chat.id, null);
+  await ctx.editMessageText("✅ Админ-панель закрыта");
+});
+
+bot.action("admin_cancel", async (ctx) => {
+  const username = ctx.from?.username;
+  if (!isAdmin(username)) {
+    await ctx.answerCbQuery("❌ У вас нет доступа");
+    return;
+  }
+  await ctx.answerCbQuery();
+  setAdminState(ctx.chat.id, null);
+  await ctx.editMessageText("🔐 **Админ-панель**\n\nВыберите действие:", {
+    parse_mode: 'Markdown',
+    ...getAdminMainKeyboard()
+  });
+});
+
 // Обработчик выбора завтрака
 bot.action("breakfast", async (ctx) => {
   // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
@@ -465,12 +610,17 @@ bot.action("breakfast", async (ctx) => {
   // Проверяем лимит запросов
   const limitCheck = await checkRequestLimit(chatId);
   if (!limitCheck.allowed) {
-    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT} всего). Купите подписку для неограниченного доступа!`);
-    const subscriptionKeyboard = getSubscriptionInfoKeyboard();
+    await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
     await ctx.reply(
-      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} всего).\n\n` +
-      `💳 Купите подписку для неограниченного доступа к рецептам!`,
-      subscriptionKeyboard
+      `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+      `💡 Для получения подписки обратитесь к администратору.`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+          ]
+        }
+      }
     );
     return;
   }
@@ -481,7 +631,13 @@ bot.action("breakfast", async (ctx) => {
     const result = await getRecipeFromParser('breakfast', chatId);
     // Увеличиваем счетчик запросов только после успешного получения рецепта
     try {
-      const incremented = await incrementRequestCount(chatId);
+      if (!limitCheck.hasSubscription) {
+        try {
+          await decrementFreeRequests(chatId);
+        } catch (error) {
+          console.error('Ошибка при уменьшении счетчика запросов:', error);
+        }
+      }
       console.log(`✅ breakfast: счетчик увеличен, текущее значение: ${incremented.request_count}`);
     } catch (error) {
       console.error('❌ Ошибка увеличения счетчика запросов:', error.message);
@@ -521,12 +677,17 @@ bot.action("dinner", async (ctx) => {
   // Проверяем лимит запросов
   const limitCheck = await checkRequestLimit(chatId);
   if (!limitCheck.allowed) {
-    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT} всего). Купите подписку для неограниченного доступа!`);
-    const subscriptionKeyboard = getSubscriptionInfoKeyboard();
+    await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
     await ctx.reply(
-      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} всего).\n\n` +
-      `💳 Купите подписку для неограниченного доступа к рецептам!`,
-      subscriptionKeyboard
+      `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+      `💡 Для получения подписки обратитесь к администратору.`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+          ]
+        }
+      }
     );
     return;
   }
@@ -549,7 +710,13 @@ bot.action("dinner", async (ctx) => {
     const result = await getRecipeFromParser('dinner', chatId);
     // Увеличиваем счетчик запросов только после успешного получения рецепта
     try {
-      const incremented = await incrementRequestCount(chatId);
+      if (!limitCheck.hasSubscription) {
+        try {
+          await decrementFreeRequests(chatId);
+        } catch (error) {
+          console.error('Ошибка при уменьшении счетчика запросов:', error);
+        }
+      }
       console.log(`✅ dinner: счетчик увеличен, текущее значение: ${incremented.request_count}`);
     } catch (error) {
       console.error('❌ Ошибка увеличения счетчика запросов:', error.message);
@@ -589,12 +756,17 @@ bot.action("lunch", async (ctx) => {
   // Проверяем лимит запросов
   const limitCheck = await checkRequestLimit(chatId);
   if (!limitCheck.allowed) {
-    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT} всего). Купите подписку для неограниченного доступа!`);
-    const subscriptionKeyboard = getSubscriptionInfoKeyboard();
+    await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
     await ctx.reply(
-      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} всего).\n\n` +
-      `💳 Купите подписку для неограниченного доступа к рецептам!`,
-      subscriptionKeyboard
+      `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+      `💡 Для получения подписки обратитесь к администратору.`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+          ]
+        }
+      }
     );
     return;
   }
@@ -617,7 +789,13 @@ bot.action("lunch", async (ctx) => {
     const result = await getRecipeFromParser('lunch', chatId);
     // Увеличиваем счетчик запросов только после успешного получения рецепта
     try {
-      const incremented = await incrementRequestCount(chatId);
+      if (!limitCheck.hasSubscription) {
+        try {
+          await decrementFreeRequests(chatId);
+        } catch (error) {
+          console.error('Ошибка при уменьшении счетчика запросов:', error);
+        }
+      }
       console.log(`✅ lunch: счетчик увеличен, текущее значение: ${incremented.request_count}`);
     } catch (error) {
       console.error('❌ Ошибка увеличения счетчика запросов:', error.message);
@@ -667,6 +845,25 @@ bot.action("ingredients", async (ctx) => {
   // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
+
+  // Проверка лимита запросов ПЕРЕД выполнением
+  const limitCheck = await checkRequestLimit(chatId);
+  if (!limitCheck.allowed) {
+    await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
+    await ctx.reply(
+      `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+      `💡 Для получения подписки обратитесь к администратору.`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+          ]
+        }
+      }
+    );
+    return;
+  }
+
   const state = await getUserState(chatId);
 
   let dishType = '';
@@ -700,6 +897,15 @@ bot.action("ingredients", async (ctx) => {
     }
 
     await setRecipeRequested(chatId, dishType, true);
+
+    // Уменьшаем счетчик бесплатных запросов, если нет подписки
+    if (!limitCheck.hasSubscription) {
+      try {
+        await decrementFreeRequests(chatId);
+      } catch (error) {
+        console.error('Ошибка при уменьшении счетчика запросов:', error);
+      }
+    }
 
     const recipeText = validateAndTruncateMessage(result.recipeText);
     const hasHistory = await hasRecipeHistory(chatId, dishType);
@@ -949,12 +1155,17 @@ bot.action("another_dish", async (ctx) => {
   // Проверяем лимит запросов
   const limitCheck = await checkRequestLimit(chatId);
   if (!limitCheck.allowed) {
-    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT} всего). Купите подписку для неограниченного доступа!`);
-    const subscriptionKeyboard = getSubscriptionInfoKeyboard();
+    await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
     await ctx.reply(
-      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} всего).\n\n` +
-      `💳 Купите подписку для неограниченного доступа к рецептам!`,
-      subscriptionKeyboard
+      `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+      `💡 Для получения подписки обратитесь к администратору.`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+          ]
+        }
+      }
     );
     return;
   }
@@ -983,7 +1194,13 @@ bot.action("another_dish", async (ctx) => {
 
     // Увеличиваем счетчик запросов только после успешного получения РАЗНОГО рецепта
     try {
-      const incremented = await incrementRequestCount(chatId);
+      if (!limitCheck.hasSubscription) {
+        try {
+          await decrementFreeRequests(chatId);
+        } catch (error) {
+          console.error('Ошибка при уменьшении счетчика запросов:', error);
+        }
+      }
       console.log(`✅ another_dish: счетчик увеличен, текущее значение: ${incremented.request_count}, url=${result.url}`);
     } catch (error) {
       console.error('❌ Ошибка увеличения счетчика запросов:', error.message);
@@ -1177,6 +1394,24 @@ bot.action("step_by_step", async (ctx) => {
   await ctx.answerCbQuery("⏳ Загружаю пошаговый рецепт...", { show_alert: false });
 
   const chatId = ctx.chat.id;
+
+  // Проверка лимита запросов ПЕРЕД выполнением
+  const limitCheck = await checkRequestLimit(chatId);
+  if (!limitCheck.allowed) {
+    await ctx.reply(
+      `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+      `💡 Для получения подписки обратитесь к администратору.`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+          ]
+        }
+      }
+    );
+    return;
+  }
+
   const state = await getUserState(chatId);
 
   let dishType = '';
@@ -1208,6 +1443,15 @@ bot.action("step_by_step", async (ctx) => {
 
   try {
     const steps = await getStepByStepRecipe(url);
+
+    // Уменьшаем счетчик бесплатных запросов, если нет подписки
+    if (!limitCheck.hasSubscription) {
+      try {
+        await decrementFreeRequests(chatId);
+      } catch (error) {
+        console.error('Ошибка при уменьшении счетчика запросов:', error);
+      }
+    }
 
     if (!steps || steps.length === 0) {
       await ctx.telegram.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
@@ -1606,6 +1850,24 @@ bot.action(/^favorite_(\d+)$/, async (ctx) => {
   const chatId = ctx.chat.id;
   const favoriteId = parseInt(ctx.match[1]);
 
+  // Проверка лимита запросов - блокируем просмотр избранного если нет запросов
+  const limitCheck = await checkRequestLimit(chatId);
+  if (!limitCheck.allowed) {
+    await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
+    await ctx.reply(
+      `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+      `💡 Для получения подписки обратитесь к администратору.`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+          ]
+        }
+      }
+    );
+    return;
+  }
+
   try {
     const response = await axios.get(`${databaseServiceUrl}/favorites/${chatId}/${favoriteId}`, {
       timeout: 10000
@@ -1784,6 +2046,24 @@ bot.action(/^favorite_ingredients_(\d+)$/, async (ctx) => {
     // Получаем полный рецепт с ингредиентами
     const result = await getFullRecipe(url, favorite.dish_type || 'breakfast');
 
+    // Уменьшаем счетчик бесплатных запросов, если нет подписки
+    if (!limitCheck.hasSubscription) {
+      try {
+        await decrementFreeRequests(chatId);
+      } catch (error) {
+        console.error('Ошибка при уменьшении счетчика запросов:', error);
+      }
+    }
+
+    // Уменьшаем счетчик бесплатных запросов, если нет подписки
+    if (!limitCheck.hasSubscription) {
+      try {
+        await decrementFreeRequests(chatId);
+      } catch (error) {
+        console.error('Ошибка при уменьшении счетчика запросов:', error);
+      }
+    }
+
     if (!result || !result.recipeText) {
       throw new Error('Пустой ответ от сервиса парсинга');
     }
@@ -1832,6 +2112,23 @@ bot.action(/^favorite_step_by_step_(\d+)$/, async (ctx) => {
   const chatId = ctx.chat.id;
   const favoriteId = parseInt(ctx.match[1]);
 
+  // Проверка лимита запросов ПЕРЕД выполнением
+  const limitCheck = await checkRequestLimit(chatId);
+  if (!limitCheck.allowed) {
+    await ctx.reply(
+      `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+      `💡 Для получения подписки обратитесь к администратору.`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+          ]
+        }
+      }
+    );
+    return;
+  }
+
   try {
     const response = await axios.get(`${databaseServiceUrl}/favorites/${chatId}/${favoriteId}`, {
       timeout: 10000
@@ -1855,6 +2152,15 @@ bot.action(/^favorite_step_by_step_(\d+)$/, async (ctx) => {
     const loadingMsg = await ctx.reply("⏳ Загрузка пошагового рецепта...");
 
     const steps = await getStepByStepRecipe(url);
+
+    // Уменьшаем счетчик бесплатных запросов, если нет подписки
+    if (!limitCheck.hasSubscription) {
+      try {
+        await decrementFreeRequests(chatId);
+      } catch (error) {
+        console.error('Ошибка при уменьшении счетчика запросов:', error);
+      }
+    }
 
     if (!steps || steps.length === 0) {
       await ctx.telegram.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
@@ -1988,10 +2294,18 @@ bot.action("back_to_main", async (ctx) => {
 
   const favoritesCount = await getFavoritesCount(chatId);
   // Проверяем подписку для отображения статуса
-  const subscription = await getSubscription(chatId);
-  const hasActiveSub = subscription && new Date(subscription.end_date) > new Date() && subscription.is_active;
-  const requestCount = await getRequestCount(chatId);
-  const remaining = FREE_REQUESTS_LIMIT - (requestCount.request_count || 0);
+  // Проверяем подписку из таблицы users
+  const user = await getUserByChatId(chatId);
+  let hasActiveSub = false;
+  if (user && user.subscription_end_date) {
+    hasActiveSub = new Date(user.subscription_end_date) > new Date();
+  }
+  if (!hasActiveSub) {
+    const subscription = await getSubscription(chatId);
+    hasActiveSub = subscription && new Date(subscription.end_date) > new Date() && subscription.is_active;
+  }
+
+  const freeRequests = user?.free_requests || 0;
 
   const mainMenuKeyboard = {
     reply_markup: {
@@ -2009,7 +2323,7 @@ bot.action("back_to_main", async (ctx) => {
 
   let messageText = "Выберите что хотите приготовить или выполните поиск по продукту";
   if (!hasActiveSub) {
-    messageText += `\n\n📊 Бесплатных запросов: ${remaining}/${FREE_REQUESTS_LIMIT}`;
+    messageText += `\n\n📊 Бесплатных запросов: ${freeRequests}`;
   }
 
   try {
@@ -2100,12 +2414,29 @@ bot.action("start_bot", async (ctx) => {
     }
   } catch (e) {}
 
+  const username = ctx.from?.username;
+
+  // Создаем или обновляем пользователя в базе
+  try {
+    await getOrCreateUser(chatId, username);
+  } catch (error) {
+    console.error('Ошибка при создании пользователя:', error);
+  }
+
   const favoritesCount = await getFavoritesCount(chatId);
+
   // Проверяем подписку для отображения статуса
-  const subscription = await getSubscription(chatId);
-  const hasActiveSub = subscription && new Date(subscription.end_date) > new Date() && subscription.is_active;
-  const requestCount = await getRequestCount(chatId);
-  const remaining = FREE_REQUESTS_LIMIT - (requestCount.request_count || 0);
+  const user = await getUserByChatId(chatId);
+  let hasActiveSub = false;
+  if (user && user.subscription_end_date) {
+    hasActiveSub = new Date(user.subscription_end_date) > new Date();
+  }
+  if (!hasActiveSub) {
+    const subscription = await getSubscription(chatId);
+    hasActiveSub = subscription && new Date(subscription.end_date) > new Date() && subscription.is_active;
+  }
+
+  const freeRequests = user?.free_requests || 0;
 
   await ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️', {
     reply_markup: {
@@ -2115,7 +2446,7 @@ bot.action("start_bot", async (ctx) => {
 
   let menuText = "Выберите что хотите приготовить или выполните поиск по продукту";
   if (!hasActiveSub) {
-    menuText += `\n\n📊 Бесплатных запросов: ${remaining}/${FREE_REQUESTS_LIMIT}`;
+    menuText += `\n\n📊 Бесплатных запросов: ${freeRequests}`;
   }
 
   await ctx.reply(menuText, {
@@ -2147,9 +2478,15 @@ bot.on("message", async (ctx) => {
       if (!limitCheck.allowed) {
         const subscriptionKeyboard = getSubscriptionInfoKeyboard();
         await ctx.reply(
-          `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} в день).\n\n` +
-          `💳 Купите подписку для неограниченного доступа к рецептам!`,
-          subscriptionKeyboard
+          `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+          `💡 Для получения подписки обратитесь к администратору.`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+              ]
+            }
+          }
         );
         return;
       }
@@ -2161,12 +2498,15 @@ bot.on("message", async (ctx) => {
         // Получаем рецепт (вакансии тоже показываем с кнопкой "Другое блюдо")
         const result = await getRecipeFromParser('search', chatId, searchQuery, true);
 
-        // Увеличиваем счетчик запросов только после успешного получения рецепта
+        // Уменьшаем счетчик запросов только после успешного получения рецепта
         try {
-          const incremented = await incrementRequestCount(chatId);
-          console.log(`✅ search: счетчик увеличен, текущее значение: ${incremented.request_count}`);
+          if (!limitCheck.hasSubscription) {
+            await decrementFreeRequests(chatId);
+          }
         } catch (error) {
-          console.error('❌ Ошибка увеличения счетчика запросов:', error.message);
+          console.error('Ошибка при уменьшении счетчика запросов:', error);
+        }
+      }
         }
         await setUserHref(chatId, 'search', result.url);
         await setRecipeRequested(chatId, 'search', false);
@@ -2202,23 +2542,36 @@ bot.action("subscription_menu", async (ctx) => {
   await ctx.answerCbQuery();
 
   const chatId = ctx.chat.id;
-  const subscription = await getSubscription(chatId);
-  const requestCount = await getRequestCount(chatId);
-  const hasActiveSub = subscription && new Date(subscription.end_date) > new Date() && subscription.is_active;
+
+  // Проверяем подписку из таблицы users
+  const user = await getUserByChatId(chatId);
+  let hasActiveSub = false;
+  let subscriptionEndDate = null;
+
+  if (user && user.subscription_end_date) {
+    subscriptionEndDate = new Date(user.subscription_end_date);
+    hasActiveSub = subscriptionEndDate > new Date();
+  }
+  if (!hasActiveSub) {
+    const subscription = await getSubscription(chatId);
+    if (subscription && subscription.end_date) {
+      subscriptionEndDate = new Date(subscription.end_date);
+      hasActiveSub = subscriptionEndDate > new Date() && subscription.is_active;
+    }
+  }
 
   let message = "💳 **Подписка**\n\n";
 
-  if (hasActiveSub) {
-    const endDate = new Date(subscription.end_date);
-    const daysLeft = Math.ceil((endDate - new Date()) / (1000 * 60 * 60 * 24));
+  if (hasActiveSub && subscriptionEndDate) {
+    const daysLeft = Math.ceil((subscriptionEndDate - new Date()) / (1000 * 60 * 60 * 24));
     message += `✅ У вас активная подписка!\n`;
-    message += `📅 Подписка действует до: ${endDate.toLocaleDateString('ru-RU')}\n`;
+    message += `📅 Подписка действует до: ${subscriptionEndDate.toLocaleDateString('ru-RU')}\n`;
     message += `⏰ Осталось дней: ${daysLeft}\n\n`;
     message += `💡 С подпиской у вас неограниченный доступ к рецептам!\n\n`;
     message += `Вы можете продлить подписку:`;
   } else {
-    const remaining = FREE_REQUESTS_LIMIT - (requestCount.request_count || 0);
-    message += `📊 Бесплатных запросов осталось: ${remaining} из ${FREE_REQUESTS_LIMIT}\n\n`;
+    const freeRequests = user?.free_requests || 0;
+    message += `📊 Бесплатных запросов осталось: ${freeRequests}\n\n`;
     message += `💡 С подпиской вы получите:\n`;
     message += `✨ Неограниченный доступ к рецептам\n`;
     message += `🚀 Без ограничений по количеству запросов\n\n`;

@@ -1,6 +1,7 @@
 services:
   redis:
     image: redis:7-alpine
+    container_name: tgbot_redis
     ports:
       - "6379:6379"
     volumes:
@@ -12,9 +13,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - tgbot_network
 
   postgres:
     image: postgres:15-alpine
+    container_name: tgbot_postgres
     environment:
       POSTGRES_DB: ${DB_NAME:-tgbot_db}
       POSTGRES_USER: ${DB_USER:-tgbot_user}
@@ -22,18 +26,60 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5433:5432"  # Изменен внешний порт на 5433, чтобы избежать конфликта с системным PostgreSQL
+      - "5433:5432"  # Внешний порт 5433, внутренний 5432
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-tgbot_user}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - tgbot_network
+
+  recipe-parser-service:
+    build:
+      context: .
+      dockerfile: services/recipe-parser-service/Dockerfile
+    container_name: tgbot_recipe_parser
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      FOOD_URL: ${FOOD_URL:-https://1000.menu/catalog/na-zavtrak}
+      DINNER_URL: ${DINNER_URL:-https://1000.menu/catalog/pp-obed}
+      LUNCH_URL: ${LUNCH_URL:-https://1000.menu/catalog/zvanji-uzhin}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    scale: 2
+    networks:
+      - tgbot_network
+
+  database-service:
+    build:
+      context: .
+      dockerfile: services/database-service/Dockerfile
+    container_name: tgbot_database
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-tgbot_db}
+      DB_USER: ${DB_USER:-tgbot_user}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_SSL: ${DB_SSL:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    scale: 2
+    networks:
+      - tgbot_network
 
   bot-service:
     build:
       context: .
       dockerfile: services/bot-service/Dockerfile
+    container_name: tgbot_bot
     environment:
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
       REDIS_HOST: redis
@@ -54,45 +100,14 @@ services:
       recipe-parser-service:
         condition: service_started
     restart: unless-stopped
-    scale: 1  # Telegram Bot API не поддерживает несколько инстансов с polling
-
-  recipe-parser-service:
-    build:
-      context: .
-      dockerfile: services/recipe-parser-service/Dockerfile
-    environment:
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      FOOD_URL: ${FOOD_URL:-https://1000.menu/catalog/na-zavtrak}
-      DINNER_URL: ${DINNER_URL:-https://1000.menu/catalog/pp-obed}
-      LUNCH_URL: ${LUNCH_URL:-https://1000.menu/catalog/zvanji-uzhin}
-    depends_on:
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    scale: 2
-
-  database-service:
-    build:
-      context: .
-      dockerfile: services/database-service/Dockerfile
-    environment:
-      DB_HOST: postgres  # Используем контейнер PostgreSQL
-      DB_PORT: 5432  # Внутренний порт контейнера (внешний 5433)
-      DB_NAME: ${DB_NAME:-tgbot_db}
-      DB_USER: ${DB_USER:-tgbot_user}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_SSL: ${DB_SSL:-false}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-    scale: 2
+    networks:
+      - tgbot_network
 
   payment-webhook-service:
     build:
       context: .
       dockerfile: services/payment-webhook-service/Dockerfile
+    container_name: tgbot_payment_webhook
     environment:
       PORT: 3003
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
@@ -106,8 +121,16 @@ services:
     ports:
       - "3003:3003"  # Открываем порт для webhook от ЮKassa
     restart: unless-stopped
+    networks:
+      - tgbot_network
 
 volumes:
   redis_data:
+    driver: local
   postgres_data:
+    driver: local
+
+networks:
+  tgbot_network:
+    driver: bridge
 

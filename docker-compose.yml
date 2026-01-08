@@ -40,7 +40,6 @@ services:
     build:
       context: .
       dockerfile: services/recipe-parser-service/Dockerfile
-    container_name: tgbot_recipe_parser
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -59,7 +58,6 @@ services:
     build:
       context: .
       dockerfile: services/database-service/Dockerfile
-    container_name: tgbot_database
     environment:
       DB_HOST: postgres
       DB_PORT: 5432

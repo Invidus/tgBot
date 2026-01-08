@@ -29,7 +29,7 @@ const isBrowserAlive = (browser) => {
  */
 const initSingleBrowser = async () => {
   try {
-    const browser = await chromium.launch({
+    const launchOptions = {
       headless: true,
       args: [
         '--disable-images',
@@ -48,7 +48,14 @@ const initSingleBrowser = async () => {
         '--disable-web-security',
         '--disable-features=IsolateOrigins,site-per-process'
       ]
-    });
+    };
+
+    // Используем системный Chromium если указан путь
+    if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
+      launchOptions.executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+    }
+
+    const browser = await chromium.launch(launchOptions);
     console.log('✅ Браузер Playwright инициализирован');
     return browser;
   } catch (error) {

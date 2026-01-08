@@ -971,29 +971,8 @@ bot.action("another_dish", async (ctx) => {
     // При нажатии "Другое блюдо" принудительно обновляем рецепт
     console.log(`📤 another_dish: отправка запроса с searchQuery="${searchQuery}", forceRefresh=true`);
 
-    // Пытаемся получить рецепт, пропуская результаты с вакансиями
-    let result = null;
-    let attempts = 0;
-    const maxAttempts = 5;
-
-    while (attempts < maxAttempts) {
-      result = await getRecipeFromParser(dishType, chatId, searchQuery, true);
-      const recipeTextCheck = validateAndTruncateMessage(result.recipeText);
-
-      // Проверяем, не является ли это вакансией
-      if (recipeTextCheck.includes('Хочу работать в 1000.menu')) {
-        console.log(`⚠️ another_dish: найдена вакансия, пропускаем. Попытка ${attempts + 1}/${maxAttempts}`);
-        attempts++;
-        if (attempts >= maxAttempts) {
-          await ctx.answerCbQuery("Не удалось найти подходящее блюдо. Попробуйте еще раз.");
-          return;
-        }
-        continue;
-      }
-
-      // Если это не вакансия, используем результат
-      break;
-    }
+    // Получаем новый рецепт (вакансии тоже показываем с кнопкой "Другое блюдо")
+    const result = await getRecipeFromParser(dishType, chatId, searchQuery, true);
 
     // Проверяем, не совпадает ли новый рецепт с текущим (до обновления в Redis)
     if (prevUrl === result.url && currentMessage) {
@@ -2179,29 +2158,8 @@ bot.on("message", async (ctx) => {
         // Сохраняем поисковый запрос для использования при нажатии "Другое блюдо"
         console.log(`💾 Сохранение поискового запроса: "${searchQuery}" для chatId=${chatId}`);
         await setUserSearchQuery(chatId, searchQuery);
-        // Пытаемся получить рецепт, пропуская результаты с вакансиями
-        let result = null;
-        let attempts = 0;
-        const maxAttempts = 5;
-
-        while (attempts < maxAttempts) {
-          // Всегда используем forceRefresh для получения нового результата
-          result = await getRecipeFromParser('search', chatId, searchQuery, true);
-          const recipeText = validateAndTruncateMessage(result.recipeText);
-
-          // Проверяем, не является ли это вакансией
-          if (recipeText.includes('Хочу работать в 1000.menu')) {
-            console.log(`⚠️ Найдена вакансия, пропускаем. Попытка ${attempts + 1}/${maxAttempts}`);
-            attempts++;
-            if (attempts >= maxAttempts) {
-              throw new Error('Не удалось найти подходящее блюдо. Попробуйте другой запрос.');
-            }
-            continue;
-          }
-
-          // Если это не вакансия, используем результат
-          break;
-        }
+        // Получаем рецепт (вакансии тоже показываем с кнопкой "Другое блюдо")
+        const result = await getRecipeFromParser('search', chatId, searchQuery, true);
 
         // Увеличиваем счетчик запросов только после успешного получения рецепта
         try {

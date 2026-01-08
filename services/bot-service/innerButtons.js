@@ -16,10 +16,11 @@ export const isRecipeUrl = (url) => {
 export const getDetailedMenuKeyboard = (recipeRequested = false, hasHistory = false, isInFavorites = false, isRecipe = true) => {
   const buttons = [];
 
-  // Показываем кнопки только для рецептов
-  if (isRecipe) {
-    buttons.push([Markup.button.callback("Другое блюдо🔁", "another_dish")]);
+  // Кнопка "Другое блюдо" показывается всегда (и для рецептов, и для вакансий)
+  buttons.push([Markup.button.callback("Другое блюдо🔁", "another_dish")]);
 
+  // Остальные кнопки показываются только для рецептов
+  if (isRecipe) {
     // Кнопка "Вернуться к прошлому рецепту" под кнопкой "Другое блюдо"
     if (hasHistory) {
       buttons.push([Markup.button.callback("◀️ Вернуться к прошлому рецепту", "previous_recipe")]);
@@ -155,4 +156,3 @@ export const getSubscriptionInfoKeyboard = () => {
     [Markup.button.callback("◀️ Вернуться на главную", "back_to_main")]
   ]);
 };
-

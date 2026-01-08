@@ -2506,8 +2506,7 @@ bot.on("message", async (ctx) => {
         } catch (error) {
           console.error('Ошибка при уменьшении счетчика запросов:', error);
         }
-      }
-        }
+
         await setUserHref(chatId, 'search', result.url);
         await setRecipeRequested(chatId, 'search', false);
 

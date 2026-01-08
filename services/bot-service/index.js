@@ -1,9 +1,11 @@
 import { Telegraf } from "telegraf";
 import { config } from "../shared/config.js";
-import { getDetailedMenuKeyboard, getSearchKeyboard, getStepNavigationKeyboard, getFavoritesKeyboard, getFavoriteRecipeKeyboard, isRecipeUrl } from "./innerButtons.js";
+import { getDetailedMenuKeyboard, getSearchKeyboard, getStepNavigationKeyboard, getFavoritesKeyboard, getFavoriteRecipeKeyboard, isRecipeUrl, getSubscriptionKeyboard, getSubscriptionInfoKeyboard } from "./innerButtons.js";
 import { validateAndTruncateMessage } from "./messageUtils.js";
 import Redis from "ioredis";
 import axios from "axios";
+import { createPayment, getPayment, parseWebhookEvent } from "./yookassa.js";
+import { randomUUID } from "node:crypto";
 
 const bot = new Telegraf(config.telegramToken);
 const redis = new Redis({
@@ -299,6 +301,113 @@ const removeFromFavorites = async (chatId, url) => {
   }
 };
 
+// ==================== ФУНКЦИИ ДЛЯ РАБОТЫ С ПОДПИСКАМИ ====================
+
+const FREE_REQUESTS_LIMIT = 10;
+
+// Получение информации о подписке пользователя
+const getSubscription = async (chatId) => {
+  try {
+    const response = await axios.get(`${databaseServiceUrl}/subscriptions/${chatId}`, {
+      timeout: 10000
+    });
+    return response.data.subscription || null;
+  } catch (error) {
+    console.error('Ошибка получения подписки:', error.message);
+    return null;
+  }
+};
+
+// Проверка, есть ли у пользователя активная подписка
+const hasActiveSubscription = async (chatId) => {
+  const subscription = await getSubscription(chatId);
+  if (!subscription) return false;
+
+  const now = new Date();
+  const endDate = new Date(subscription.end_date);
+  return endDate > now && subscription.is_active;
+};
+
+// Получение счетчика запросов пользователя
+const getRequestCount = async (chatId) => {
+  try {
+    const response = await axios.get(`${databaseServiceUrl}/request-counts/${chatId}`, {
+      timeout: 10000
+    });
+    return response.data.requestCount || { request_count: 0 };
+  } catch (error) {
+    console.error('Ошибка получения счетчика запросов:', error.message);
+    return { request_count: 0 };
+  }
+};
+
+// Увеличение счетчика запросов
+const incrementRequestCount = async (chatId) => {
+  try {
+    const response = await axios.post(`${databaseServiceUrl}/request-counts/${chatId}/increment`, {}, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    });
+    return response.data.requestCount || { request_count: 0 };
+  } catch (error) {
+    console.error('Ошибка увеличения счетчика запросов:', error.message);
+    return { request_count: 0 };
+  }
+};
+
+// Проверка лимита запросов перед выполнением действия
+const checkRequestLimit = async (chatId) => {
+  const hasSubscription = await hasActiveSubscription(chatId);
+
+  // Если есть активная подписка, лимит не применяется
+  if (hasSubscription) {
+    return { allowed: true, remaining: Infinity };
+  }
+
+  // Для бесплатных пользователей проверяем лимит
+  const requestCount = await getRequestCount(chatId);
+  const currentCount = requestCount.request_count || 0;
+  const remaining = FREE_REQUESTS_LIMIT - currentCount;
+
+  if (remaining <= 0) {
+    return { allowed: false, remaining: 0 };
+  }
+
+  return { allowed: true, remaining };
+};
+
+// Создание подписки
+const createSubscription = async (chatId, subscriptionType, months) => {
+  try {
+    const response = await axios.post(`${databaseServiceUrl}/subscriptions`, {
+      chatId,
+      subscriptionType,
+      months
+    }, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    });
+    return response.data.subscription;
+  } catch (error) {
+    console.error('Ошибка создания подписки:', error.message);
+    throw error;
+  }
+};
+
+// Получение подписок, которые скоро истекают (для уведомлений)
+const getExpiringSubscriptions = async (days = 3) => {
+  try {
+    const response = await axios.get(`${databaseServiceUrl}/subscriptions/expiring-soon`, {
+      params: { days },
+      timeout: 10000
+    });
+    return response.data.subscriptions || [];
+  } catch (error) {
+    console.error('Ошибка получения истекающих подписок:', error.message);
+    return [];
+  }
+};
+
 // Обработчик команды /start
 bot.start(async (ctx) => {
   const chatId = ctx.chat.id;
@@ -312,17 +421,31 @@ bot.start(async (ctx) => {
     }
   });
 
-  await ctx.reply("Выберите что хотите приготовить или выполните поиск по продукту", {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "Завтрак🍏", callback_data: "breakfast" }],
-        [{ text: "Обед🍜", callback_data: "dinner" }],
-        [{ text: "Ужин🍝", callback_data: "lunch" }],
-        [{ text: "Поиск🔎", callback_data: "search" }],
-        [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
-        [{ text: "Закрыть❌", callback_data: "close_menu" }]
-      ]
-    }
+  // Проверяем подписку для отображения статуса
+  const subscription = await getSubscription(chatId);
+  const hasActiveSub = subscription && new Date(subscription.end_date) > new Date() && subscription.is_active;
+  const requestCount = await getRequestCount(chatId);
+  const remaining = FREE_REQUESTS_LIMIT - (requestCount.request_count || 0);
+
+  let menuText = "Выберите что хотите приготовить или выполните поиск по продукту";
+  if (!hasActiveSub) {
+    menuText += `\n\n📊 Бесплатных запросов: ${remaining}/${FREE_REQUESTS_LIMIT}`;
+  }
+
+  const mainMenuKeyboard = {
+    inline_keyboard: [
+      [{ text: "Завтрак🍏", callback_data: "breakfast" }],
+      [{ text: "Обед🍜", callback_data: "dinner" }],
+      [{ text: "Ужин🍝", callback_data: "lunch" }],
+      [{ text: "Поиск🔎", callback_data: "search" }],
+      [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
+      [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
+      [{ text: "Закрыть❌", callback_data: "close_menu" }]
+    ]
+  };
+
+  await ctx.reply(menuText, {
+    reply_markup: mainMenuKeyboard
   });
 });
 
@@ -331,10 +454,26 @@ bot.action("breakfast", async (ctx) => {
   // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
+
+  // Проверяем лимит запросов
+  const limitCheck = await checkRequestLimit(chatId);
+  if (!limitCheck.allowed) {
+    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT}/день). Купите подписку для неограниченного доступа!`);
+    const subscriptionKeyboard = getSubscriptionInfoKeyboard();
+    await ctx.reply(
+      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} в день).\n\n` +
+      `💳 Купите подписку для неограниченного доступа к рецептам!`,
+      subscriptionKeyboard
+    );
+    return;
+  }
+
   await setUserState(chatId, 1);
 
   try {
     const result = await getRecipeFromParser('breakfast', chatId);
+    // Увеличиваем счетчик запросов только после успешного получения рецепта
+    await incrementRequestCount(chatId);
     await setUserHref(chatId, 'breakfast', result.url);
     await setRecipeRequested(chatId, 'breakfast', false);
 
@@ -366,6 +505,20 @@ bot.action("dinner", async (ctx) => {
   // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
+
+  // Проверяем лимит запросов
+  const limitCheck = await checkRequestLimit(chatId);
+  if (!limitCheck.allowed) {
+    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT}/день). Купите подписку для неограниченного доступа!`);
+    const subscriptionKeyboard = getSubscriptionInfoKeyboard();
+    await ctx.reply(
+      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} в день).\n\n` +
+      `💳 Купите подписку для неограниченного доступа к рецептам!`,
+      subscriptionKeyboard
+    );
+    return;
+  }
+
   await setUserState(chatId, 2);
 
   // Сохраняем текущий рецепт в историю перед получением нового
@@ -382,6 +535,8 @@ bot.action("dinner", async (ctx) => {
 
   try {
     const result = await getRecipeFromParser('dinner', chatId);
+    // Увеличиваем счетчик запросов только после успешного получения рецепта
+    await incrementRequestCount(chatId);
     await setUserHref(chatId, 'dinner', result.url);
     await setRecipeRequested(chatId, 'dinner', false);
 
@@ -413,6 +568,20 @@ bot.action("lunch", async (ctx) => {
   // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
+
+  // Проверяем лимит запросов
+  const limitCheck = await checkRequestLimit(chatId);
+  if (!limitCheck.allowed) {
+    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT}/день). Купите подписку для неограниченного доступа!`);
+    const subscriptionKeyboard = getSubscriptionInfoKeyboard();
+    await ctx.reply(
+      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} в день).\n\n` +
+      `💳 Купите подписку для неограниченного доступа к рецептам!`,
+      subscriptionKeyboard
+    );
+    return;
+  }
+
   await setUserState(chatId, 3);
 
   // Сохраняем текущий рецепт в историю перед получением нового
@@ -429,6 +598,8 @@ bot.action("lunch", async (ctx) => {
 
   try {
     const result = await getRecipeFromParser('lunch', chatId);
+    // Увеличиваем счетчик запросов только после успешного получения рецепта
+    await incrementRequestCount(chatId);
     await setUserHref(chatId, 'lunch', result.url);
     await setRecipeRequested(chatId, 'lunch', false);
 
@@ -753,6 +924,19 @@ bot.action("another_dish", async (ctx) => {
   // Сбрасываем флаг запрошенного рецепта
   await setRecipeRequested(chatId, dishType, false);
 
+  // Проверяем лимит запросов
+  const limitCheck = await checkRequestLimit(chatId);
+  if (!limitCheck.allowed) {
+    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT}/день). Купите подписку для неограниченного доступа!`);
+    const subscriptionKeyboard = getSubscriptionInfoKeyboard();
+    await ctx.reply(
+      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} в день).\n\n` +
+      `💳 Купите подписку для неограниченного доступа к рецептам!`,
+      subscriptionKeyboard
+    );
+    return;
+  }
+
   try {
     // Для поиска получаем сохраненный запрос, для остальных типов - null
     const searchQuery = dishType === 'search' ? await getUserSearchQuery(chatId) : null;
@@ -789,6 +973,8 @@ bot.action("another_dish", async (ctx) => {
       break;
     }
 
+    // Увеличиваем счетчик запросов только после успешного получения рецепта
+    await incrementRequestCount(chatId);
     console.log(`✅ another_dish: получен результат, url=${result.url}`);
 
     // Проверяем, не совпадает ли новый рецепт с текущим (до обновления в Redis)
@@ -1703,12 +1889,80 @@ bot.action(/^favorite_step_by_step_(\d+)$/, async (ctx) => {
   }
 });
 
+// Функция для проверки и активации ожидающих платежей (fallback если webhook не работает)
+const checkPendingPayments = async (chatId) => {
+  try {
+    // Получаем все ожидающие платежи пользователя
+    const response = await axios.get(`${databaseServiceUrl}/payments`, {
+      params: { chatId: chatId.toString(), status: 'pending' },
+      timeout: 10000
+    }).catch(() => ({ data: { payments: [] } }));
+
+    const pendingPayments = response.data.payments || [];
+
+    for (const payment of pendingPayments) {
+      if (payment.yookassa_payment_id) {
+        try {
+          // Проверяем статус платежа в ЮKassa
+          const yookassaPayment = await getPayment(payment.yookassa_payment_id);
+
+          if (yookassaPayment.status === 'succeeded' && payment.status !== 'succeeded') {
+            // Обновляем статус в БД
+            await axios.put(`${databaseServiceUrl}/payments/${payment.payment_id}`, {
+              status: 'succeeded',
+              yookassaPaymentId: payment.yookassa_payment_id
+            }, {
+              timeout: 10000,
+              headers: { 'Content-Type': 'application/json' }
+            }).catch(() => {});
+
+            // Активируем подписку
+            await createSubscription(chatId, payment.subscription_type, payment.months);
+
+            return {
+              success: true,
+              message: `✅ Подписка активирована!\n\n` +
+                       `📅 Срок действия: ${payment.months} ${payment.months === 1 ? 'месяц' : payment.months < 5 ? 'месяца' : 'месяцев'}\n` +
+                       `💰 Сумма: ${payment.amount}₽\n\n` +
+                       `🎉 Теперь у вас неограниченный доступ к рецептам!`
+            };
+          } else if (yookassaPayment.status === 'canceled') {
+            // Обновляем статус отмененного платежа
+            await axios.put(`${databaseServiceUrl}/payments/${payment.payment_id}`, {
+              status: 'canceled',
+              yookassaPaymentId: payment.yookassa_payment_id
+            }, {
+              timeout: 10000,
+              headers: { 'Content-Type': 'application/json' }
+            }).catch(() => {});
+          }
+        } catch (error) {
+          console.error('Ошибка проверки платежа:', error.message);
+        }
+      }
+    }
+
+    return null;
+  } catch (error) {
+    console.error('Ошибка проверки ожидающих платежей:', error.message);
+    return null;
+  }
+};
+
 // Обработчик возврата на главную
 bot.action("back_to_main", async (ctx) => {
   // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   const currentMessage = ctx.callbackQuery?.message;
+
+  // Проверяем ожидающие платежи (fallback если webhook не работает)
+  const paymentCheck = await checkPendingPayments(chatId);
+  if (paymentCheck && paymentCheck.success) {
+    await ctx.reply(paymentCheck.message, {
+      reply_markup: { inline_keyboard: [[{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]] }
+    }).catch(() => {});
+  }
 
   // Проверяем, есть ли активный пошаговый рецепт
   const recipeData = await getStepByStepData(chatId);
@@ -1727,6 +1981,12 @@ bot.action("back_to_main", async (ctx) => {
   await setUserState(chatId, 0);
 
   const favoritesCount = await getFavoritesCount(chatId);
+  // Проверяем подписку для отображения статуса
+  const subscription = await getSubscription(chatId);
+  const hasActiveSub = subscription && new Date(subscription.end_date) > new Date() && subscription.is_active;
+  const requestCount = await getRequestCount(chatId);
+  const remaining = FREE_REQUESTS_LIMIT - (requestCount.request_count || 0);
+
   const mainMenuKeyboard = {
     reply_markup: {
       inline_keyboard: [
@@ -1735,12 +1995,16 @@ bot.action("back_to_main", async (ctx) => {
         [{ text: "Ужин🍝", callback_data: "lunch" }],
         [{ text: "Поиск🔎", callback_data: "search" }],
         [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
+        [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
         [{ text: "Закрыть❌", callback_data: "close_menu" }]
       ]
     }
   };
 
-  const messageText = "Выберите что хотите приготовить или выполните поиск по продукту";
+  let messageText = "Выберите что хотите приготовить или выполните поиск по продукту";
+  if (!hasActiveSub) {
+    messageText += `\n\n📊 Бесплатных запросов: ${remaining}/${FREE_REQUESTS_LIMIT}`;
+  }
 
   try {
     // Если мы удалили сообщение пошагового рецепта, просто отправляем новое
@@ -1831,6 +2095,11 @@ bot.action("start_bot", async (ctx) => {
   } catch (e) {}
 
   const favoritesCount = await getFavoritesCount(chatId);
+  // Проверяем подписку для отображения статуса
+  const subscription = await getSubscription(chatId);
+  const hasActiveSub = subscription && new Date(subscription.end_date) > new Date() && subscription.is_active;
+  const requestCount = await getRequestCount(chatId);
+  const remaining = FREE_REQUESTS_LIMIT - (requestCount.request_count || 0);
 
   await ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️', {
     reply_markup: {
@@ -1838,7 +2107,12 @@ bot.action("start_bot", async (ctx) => {
     }
   });
 
-  await ctx.reply("Выберите что хотите приготовить или выполните поиск по продукту", {
+  let menuText = "Выберите что хотите приготовить или выполните поиск по продукту";
+  if (!hasActiveSub) {
+    menuText += `\n\n📊 Бесплатных запросов: ${remaining}/${FREE_REQUESTS_LIMIT}`;
+  }
+
+  await ctx.reply(menuText, {
     reply_markup: {
       inline_keyboard: [
         [{ text: "Завтрак🍏", callback_data: "breakfast" }],
@@ -1846,6 +2120,7 @@ bot.action("start_bot", async (ctx) => {
         [{ text: "Ужин🍝", callback_data: "lunch" }],
         [{ text: "Поиск🔎", callback_data: "search" }],
         [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
+        [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
         [{ text: "Закрыть❌", callback_data: "close_menu" }]
       ]
     }
@@ -1861,6 +2136,18 @@ bot.on("message", async (ctx) => {
   if (state === 4 && ctx.message.text && !ctx.message.text.startsWith('/')) {
     const searchQuery = ctx.message.text.trim();
     if (searchQuery) {
+      // Проверяем лимит запросов
+      const limitCheck = await checkRequestLimit(chatId);
+      if (!limitCheck.allowed) {
+        const subscriptionKeyboard = getSubscriptionInfoKeyboard();
+        await ctx.reply(
+          `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} в день).\n\n` +
+          `💳 Купите подписку для неограниченного доступа к рецептам!`,
+          subscriptionKeyboard
+        );
+        return;
+      }
+
       try {
         // Сохраняем поисковый запрос для использования при нажатии "Другое блюдо"
         console.log(`💾 Сохранение поискового запроса: "${searchQuery}" для chatId=${chatId}`);
@@ -1889,6 +2176,8 @@ bot.on("message", async (ctx) => {
           break;
         }
 
+        // Увеличиваем счетчик запросов только после успешного получения рецепта
+        await incrementRequestCount(chatId);
         await setUserHref(chatId, 'search', result.url);
         await setRecipeRequested(chatId, 'search', false);
 
@@ -1915,6 +2204,277 @@ bot.on("message", async (ctx) => {
     }
   }
 });
+
+// ==================== ОБРАБОТЧИКИ ПОДПИСКИ ====================
+
+// Обработчик меню подписки
+bot.action("subscription_menu", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const chatId = ctx.chat.id;
+  const subscription = await getSubscription(chatId);
+  const requestCount = await getRequestCount(chatId);
+  const hasActiveSub = subscription && new Date(subscription.end_date) > new Date() && subscription.is_active;
+
+  let message = "💳 **Подписка**\n\n";
+
+  if (hasActiveSub) {
+    const endDate = new Date(subscription.end_date);
+    const daysLeft = Math.ceil((endDate - new Date()) / (1000 * 60 * 60 * 24));
+    message += `✅ У вас активная подписка!\n`;
+    message += `📅 Подписка действует до: ${endDate.toLocaleDateString('ru-RU')}\n`;
+    message += `⏰ Осталось дней: ${daysLeft}\n\n`;
+    message += `💡 С подпиской у вас неограниченный доступ к рецептам!\n\n`;
+    message += `Вы можете продлить подписку:`;
+  } else {
+    const remaining = FREE_REQUESTS_LIMIT - (requestCount.request_count || 0);
+    message += `📊 Бесплатных запросов осталось: ${remaining} из ${FREE_REQUESTS_LIMIT}\n\n`;
+    message += `💡 С подпиской вы получите:\n`;
+    message += `✨ Неограниченный доступ к рецептам\n`;
+    message += `🚀 Без ограничений по количеству запросов\n\n`;
+    message += `Выберите период подписки:`;
+  }
+
+  const keyboard = getSubscriptionKeyboard();
+  await ctx.reply(message, { parse_mode: 'Markdown', ...keyboard });
+});
+
+// Обработчик покупки подписки на месяц
+bot.action("subscribe_month", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+
+  const chatId = ctx.chat.id;
+  const price = 300;
+  const months = 1;
+  const subscriptionType = 'month';
+
+  try {
+    // Создаем уникальный ID платежа
+    const paymentId = randomUUID();
+
+    // Создаем запись о платеже в БД
+    await axios.post(`${databaseServiceUrl}/payments`, {
+      chatId,
+      paymentId,
+      subscriptionType,
+      months,
+      amount: price
+    }, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    }).catch(err => console.error('Ошибка создания записи о платеже:', err));
+
+    // Создаем платеж в ЮKassa
+    const payment = await createPayment({
+      amount: price,
+      description: `Подписка на ${months} ${months === 1 ? 'месяц' : 'месяца'}`,
+      paymentId,
+      metadata: {
+        chatId: chatId.toString(),
+        subscriptionType,
+        months: months.toString()
+      }
+    });
+
+    // Обновляем запись о платеже с ID из ЮKassa
+    await axios.put(`${databaseServiceUrl}/payments/${paymentId}`, {
+      status: 'pending',
+      yookassaPaymentId: payment.id
+    }, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    }).catch(err => console.error('Ошибка обновления платежа:', err));
+
+    await ctx.reply(
+      `💳 **Оплата подписки**\n\n` +
+      `📅 Период: ${months} ${months === 1 ? 'месяц' : 'месяца'}\n` +
+      `💰 Сумма: ${price}₽\n\n` +
+      `Нажмите на кнопку ниже, чтобы перейти к оплате:`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "💳 Оплатить", url: payment.confirmationUrl }],
+            [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+          ]
+        }
+      }
+    );
+  } catch (error) {
+    console.error('Ошибка создания платежа:', error);
+    await ctx.reply("❌ Ошибка при создании платежа. Попробуйте позже.");
+  }
+});
+
+// Обработчик покупки подписки на полгода
+bot.action("subscribe_half_year", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+
+  const chatId = ctx.chat.id;
+  const pricePerMonth = 270; // 300 - 10%
+  const months = 6;
+  const totalPrice = pricePerMonth * months;
+  const subscriptionType = 'half_year';
+
+  try {
+    // Создаем уникальный ID платежа
+    const paymentId = randomUUID();
+
+    // Создаем запись о платеже в БД
+    await axios.post(`${databaseServiceUrl}/payments`, {
+      chatId,
+      paymentId,
+      subscriptionType,
+      months,
+      amount: totalPrice
+    }, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    }).catch(err => console.error('Ошибка создания записи о платеже:', err));
+
+    // Создаем платеж в ЮKassa
+    const payment = await createPayment({
+      amount: totalPrice,
+      description: `Подписка на ${months} месяцев (скидка 10%)`,
+      paymentId,
+      metadata: {
+        chatId: chatId.toString(),
+        subscriptionType,
+        months: months.toString()
+      }
+    });
+
+    // Обновляем запись о платеже с ID из ЮKassa
+    await axios.put(`${databaseServiceUrl}/payments/${paymentId}`, {
+      status: 'pending',
+      yookassaPaymentId: payment.id
+    }, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    }).catch(err => console.error('Ошибка обновления платежа:', err));
+
+    await ctx.reply(
+      `💳 **Оплата подписки**\n\n` +
+      `📅 Период: ${months} месяцев\n` +
+      `💰 Сумма: ${totalPrice}₽ (${pricePerMonth}₽/месяц, скидка 10%)\n\n` +
+      `Нажмите на кнопку ниже, чтобы перейти к оплате:`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "💳 Оплатить", url: payment.confirmationUrl }],
+            [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+          ]
+        }
+      }
+    );
+  } catch (error) {
+    console.error('Ошибка создания платежа:', error);
+    await ctx.reply("❌ Ошибка при создании платежа. Попробуйте позже.");
+  }
+});
+
+// Обработчик покупки подписки на год
+bot.action("subscribe_year", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+
+  const chatId = ctx.chat.id;
+  const pricePerMonth = 240; // 300 - 20%
+  const months = 12;
+  const totalPrice = pricePerMonth * months;
+  const subscriptionType = 'year';
+
+  try {
+    // Создаем уникальный ID платежа
+    const paymentId = randomUUID();
+
+    // Создаем запись о платеже в БД
+    await axios.post(`${databaseServiceUrl}/payments`, {
+      chatId,
+      paymentId,
+      subscriptionType,
+      months,
+      amount: totalPrice
+    }, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    }).catch(err => console.error('Ошибка создания записи о платеже:', err));
+
+    // Создаем платеж в ЮKassa
+    const payment = await createPayment({
+      amount: totalPrice,
+      description: `Подписка на ${months} месяцев (скидка 20%)`,
+      paymentId,
+      metadata: {
+        chatId: chatId.toString(),
+        subscriptionType,
+        months: months.toString()
+      }
+    });
+
+    // Обновляем запись о платеже с ID из ЮKassa
+    await axios.put(`${databaseServiceUrl}/payments/${paymentId}`, {
+      status: 'pending',
+      yookassaPaymentId: payment.id
+    }, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    }).catch(err => console.error('Ошибка обновления платежа:', err));
+
+    await ctx.reply(
+      `💳 **Оплата подписки**\n\n` +
+      `📅 Период: ${months} месяцев\n` +
+      `💰 Сумма: ${totalPrice}₽ (${pricePerMonth}₽/месяц, скидка 20%)\n\n` +
+      `Нажмите на кнопку ниже, чтобы перейти к оплате:`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "💳 Оплатить", url: payment.confirmationUrl }],
+            [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+          ]
+        }
+      }
+    );
+  } catch (error) {
+    console.error('Ошибка создания платежа:', error);
+    await ctx.reply("❌ Ошибка при создании платежа. Попробуйте позже.");
+  }
+});
+
+// Функция для отправки уведомлений о скором окончании подписки
+const sendSubscriptionExpiryNotifications = async () => {
+  try {
+    const expiringSubscriptions = await getExpiringSubscriptions(3); // За 3 дня до окончания
+
+    for (const subscription of expiringSubscriptions) {
+      const endDate = new Date(subscription.end_date);
+      const daysLeft = Math.ceil((endDate - new Date()) / (1000 * 60 * 60 * 24));
+
+      let message = `⏰ **Уведомление о подписке**\n\n`;
+      message += `Ваша подписка заканчивается через ${daysLeft} ${daysLeft === 1 ? 'день' : daysLeft < 5 ? 'дня' : 'дней'}!\n\n`;
+      message += `📅 Дата окончания: ${endDate.toLocaleDateString('ru-RU')}\n\n`;
+      message += `💳 Продлите подписку, чтобы продолжить пользоваться ботом без ограничений!`;
+
+      try {
+        await bot.telegram.sendMessage(subscription.chat_id, message, {
+          parse_mode: 'Markdown',
+          reply_markup: getSubscriptionKeyboard().reply_markup
+        });
+        console.log(`✅ Уведомление отправлено пользователю ${subscription.chat_id}`);
+      } catch (error) {
+        console.error(`❌ Ошибка отправки уведомления пользователю ${subscription.chat_id}:`, error.message);
+      }
+    }
+  } catch (error) {
+    console.error('Ошибка отправки уведомлений о подписке:', error);
+  }
+};
+
+// Запускаем периодическую проверку истекающих подписок (каждый час)
+setInterval(() => {
+  sendSubscriptionExpiryNotifications().catch(console.error);
+}, 60 * 60 * 1000); // Каждый час
 
 // Graceful shutdown
 const shutdown = async (signal) => {

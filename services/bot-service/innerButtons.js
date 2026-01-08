@@ -138,3 +138,21 @@ export const getSearchKeyboard = () => {
   ]);
 };
 
+// Клавиатура для меню подписки
+export const getSubscriptionKeyboard = () => {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("1 месяц - 300₽", "subscribe_month")],
+    [Markup.button.callback("6 месяцев - 1620₽ (скидка 10%)", "subscribe_half_year")],
+    [Markup.button.callback("12 месяцев - 2880₽ (скидка 20%)", "subscribe_year")],
+    [Markup.button.callback("◀️ Вернуться на главную", "back_to_main")]
+  ]);
+};
+
+// Клавиатура для информации о подписке
+export const getSubscriptionInfoKeyboard = () => {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("💳 Купить подписку", "subscription_menu")],
+    [Markup.button.callback("◀️ Вернуться на главную", "back_to_main")]
+  ]);
+};
+

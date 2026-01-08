@@ -49,6 +49,11 @@ export const config = {
   services: {
     recipeParser: process.env.RECIPE_PARSER_URL || "http://localhost:3001",
     database: process.env.DATABASE_SERVICE_URL || "http://localhost:3002"
+  },
+  yookassa: {
+    shopId: process.env.YOOKASSA_SHOP_ID,
+    secretKey: process.env.YOOKASSA_SECRET_KEY,
+    isTestMode: process.env.YOOKASSA_TEST_MODE === "true" || !process.env.YOOKASSA_SHOP_ID
   }
 };
 

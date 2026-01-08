@@ -19,6 +19,22 @@ import {
   getFavoriteById,
   removeFromFavoritesById
 } from "./favoritesService.js";
+import {
+  getOrCreateUser,
+  hasActiveSubscription,
+  getUserByChatId,
+  decrementFreeRequests
+} from "./userService.js";
+import {
+  isAdmin,
+  getAdminMainKeyboard,
+  handleGetUserInfo,
+  handleSetFreeRequests,
+  handleSetSubscription,
+  processGetUserInfo,
+  processSetFreeRequests,
+  processSetSubscription
+} from "./adminPanel.js";
 
 // TTL(time to live) очистка старых записей
 const USER_DATA_TTL = 24 * 60 * 60 * 1000;
@@ -67,6 +83,9 @@ const bot = new Telegraf(config.telegramToken, {});
 // Хранилище состояний пользователей: chatId -> state
 const userStates = new Map();
 
+// Хранилище состояний админ-панели: chatId -> state
+const adminStates = new Map();
+
 // Вспомогательные функции для работы с состоянием
 const getUserState = (chatId) => {
     return userStates.get(chatId) || 0;
@@ -78,6 +97,38 @@ const setUserState = (chatId, state) => {
 
 const resetUserState = (chatId) => {
     userStates.set(chatId, 0);
+};
+
+// Функции для работы с состоянием админ-панели
+const getAdminState = (chatId) => {
+    return adminStates.get(chatId) || null;
+};
+
+const setAdminState = (chatId, state) => {
+    if (state) {
+        adminStates.set(chatId, state);
+    } else {
+        adminStates.delete(chatId);
+    }
+};
+
+// Проверка лимита запросов
+const checkRequestLimit = async (chatId) => {
+    // Проверяем подписку
+    const hasSubscription = await hasActiveSubscription(chatId);
+    if (hasSubscription) {
+        return { allowed: true, remaining: Infinity, hasSubscription: true };
+    }
+
+    // Проверяем бесплатные запросы
+    const user = await getUserByChatId(chatId);
+    const freeRequests = user?.free_requests || 0;
+
+    if (freeRequests <= 0) {
+        return { allowed: false, remaining: 0, hasSubscription: false };
+    }
+
+    return { allowed: true, remaining: freeRequests, hasSubscription: false };
 };
 
 // Функции для работы с историей рецептов (оптимизированы для скорости)
@@ -196,8 +247,18 @@ const showDishTypeMenu = async (ctx, message = "Выберите тип блюд
 
   bot.start(async (ctx) => {
     const chatId = ctx.chat.id;
+    const username = ctx.from?.username;
+
     resetUserState(chatId);
     resetUserHrefs(chatId);
+    setAdminState(chatId, null);
+
+    // Создаем или обновляем пользователя в базе
+    try {
+      await getOrCreateUser(chatId, username);
+    } catch (error) {
+      console.error('Ошибка при создании пользователя:', error);
+    }
 
     // Сначала удаляем старую reply keyboard
     await ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️', {
@@ -221,6 +282,22 @@ const showDishTypeMenu = async (ctx, message = "Выберите тип блюд
         }
     });
 });
+
+// Команда для админ-панели
+bot.command("admin", async (ctx) => {
+    const chatId = ctx.chat.id;
+    const username = ctx.from?.username;
+
+    if (!isAdmin(username)) {
+        await ctx.reply("❌ У вас нет доступа к админ-панели.");
+        return;
+    }
+
+    await ctx.reply("🔐 **Админ-панель**\n\nВыберите действие:", {
+        parse_mode: 'Markdown',
+        ...getAdminMainKeyboard()
+    });
+});
 // Команда для удаления reply keyboard
 bot.command("removekeyboard", async (ctx) => {
     await ctx.reply("Клавиатура удалена", {
@@ -230,11 +307,92 @@ bot.command("removekeyboard", async (ctx) => {
     });
  });
 
+ // Обработчики админ-панели
+bot.action("admin_get_user_info", async (ctx) => {
+    const username = ctx.from?.username;
+    if (!isAdmin(username)) {
+        await ctx.answerCbQuery("❌ У вас нет доступа");
+        return;
+    }
+    const state = await handleGetUserInfo(ctx);
+    if (state) {
+        setAdminState(ctx.chat.id, state);
+    }
+});
+
+bot.action("admin_set_free_requests", async (ctx) => {
+    const username = ctx.from?.username;
+    if (!isAdmin(username)) {
+        await ctx.answerCbQuery("❌ У вас нет доступа");
+        return;
+    }
+    const state = await handleSetFreeRequests(ctx);
+    if (state) {
+        setAdminState(ctx.chat.id, state);
+    }
+});
+
+bot.action("admin_set_subscription", async (ctx) => {
+    const username = ctx.from?.username;
+    if (!isAdmin(username)) {
+        await ctx.answerCbQuery("❌ У вас нет доступа");
+        return;
+    }
+    const state = await handleSetSubscription(ctx);
+    if (state) {
+        setAdminState(ctx.chat.id, state);
+    }
+});
+
+bot.action("admin_close", async (ctx) => {
+    const username = ctx.from?.username;
+    if (!isAdmin(username)) {
+        await ctx.answerCbQuery("❌ У вас нет доступа");
+        return;
+    }
+    await ctx.answerCbQuery();
+    setAdminState(ctx.chat.id, null);
+    await ctx.editMessageText("✅ Админ-панель закрыта");
+});
+
+bot.action("admin_cancel", async (ctx) => {
+    const username = ctx.from?.username;
+    if (!isAdmin(username)) {
+        await ctx.answerCbQuery("❌ У вас нет доступа");
+        return;
+    }
+    await ctx.answerCbQuery();
+    setAdminState(ctx.chat.id, null);
+    await ctx.editMessageText("🔐 **Админ-панель**\n\nВыберите действие:", {
+        parse_mode: 'Markdown',
+        ...getAdminMainKeyboard()
+    });
+});
+
  // Обработка inline-кнопок
 bot.action("breakfast", async (ctx) => {
     await ctx.answerCbQuery("Загрузка...", true);
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
+
+    // Проверяем лимит запросов
+    const limitCheck = await checkRequestLimit(chatId);
+    if (!limitCheck.allowed) {
+        await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
+        const user = await getUserByChatId(chatId);
+        await ctx.reply(
+            `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+            `💡 Для получения подписки обратитесь к администратору.`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+                    ]
+                }
+            }
+        );
+        return;
+    }
 
     // Сохраняем текущий рецепт в историю перед получением нового
     const currentMessage = ctx.callbackQuery?.message;
@@ -263,13 +421,41 @@ bot.action("breakfast", async (ctx) => {
             await ctx.reply(breakfast, keyboard);
         }
     }
-        setUserState(chatId, 1);
+
+    // Уменьшаем счетчик бесплатных запросов, если нет подписки
+    if (!limitCheck.hasSubscription) {
+        try {
+            await decrementFreeRequests(chatId);
+        } catch (error) {
+            console.error('Ошибка при уменьшении счетчика запросов:', error);
+        }
+    }
+
+    setUserState(chatId, 1);
 });
 
 bot.action("dinner", async (ctx) => {
     await ctx.answerCbQuery("Загрузка...", true);
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
+
+    // Проверяем лимит запросов
+    const limitCheck = await checkRequestLimit(chatId);
+    if (!limitCheck.allowed) {
+        await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
+        await ctx.reply(
+            `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+            `💡 Для получения подписки обратитесь к администратору.`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+                    ]
+                }
+            }
+        );
+        return;
+    }
 
     // Сохраняем текущий рецепт в историю перед получением нового
     const currentMessage = ctx.callbackQuery?.message;
@@ -299,12 +485,39 @@ bot.action("dinner", async (ctx) => {
             await ctx.reply(dinner, keyboard);
         }
     }
+
+    // Уменьшаем счетчик бесплатных запросов, если нет подписки
+    if (!limitCheck.hasSubscription) {
+        try {
+            await decrementFreeRequests(chatId);
+        } catch (error) {
+            console.error('Ошибка при уменьшении счетчика запросов:', error);
+        }
+    }
 });
 
 bot.action("lunch", async (ctx) => {
     await ctx.answerCbQuery("Загрузка...", true);
     const chatId = ctx.chat.id;
     updateUserActivity(chatId);
+
+    // Проверяем лимит запросов
+    const limitCheck = await checkRequestLimit(chatId);
+    if (!limitCheck.allowed) {
+        await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
+        await ctx.reply(
+            `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+            `💡 Для получения подписки обратитесь к администратору.`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+                    ]
+                }
+            }
+        );
+        return;
+    }
 
     // Сохраняем текущий рецепт в историю перед получением нового
     const currentMessage = ctx.callbackQuery?.message;
@@ -332,6 +545,15 @@ bot.action("lunch", async (ctx) => {
             await ctx.answerCbQuery("Показан тот же результат. Попробуйте еще раз.");
         } else {
             await ctx.reply(lunch, keyboard);
+        }
+    }
+
+    // Уменьшаем счетчик бесплатных запросов, если нет подписки
+    if (!limitCheck.hasSubscription) {
+        try {
+            await decrementFreeRequests(chatId);
+        } catch (error) {
+            console.error('Ошибка при уменьшении счетчика запросов:', error);
         }
     }
 });
@@ -382,6 +604,24 @@ bot.action("another_dish", async (ctx) => {
     else if (state === 2) resetRecipeRequested(chatId, 'dinner');
     else if (state === 3) resetRecipeRequested(chatId, 'lunch');
     else if (state === 4) resetRecipeRequested(chatId, 'search');
+
+    // Проверяем лимит запросов для действия "another_dish"
+    const limitCheck = await checkRequestLimit(chatId);
+    if (!limitCheck.allowed) {
+        await ctx.answerCbQuery("❌ У вас закончились бесплатные запросы");
+        await ctx.reply(
+            `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+            `💡 Для получения подписки обратитесь к администратору.`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+                    ]
+                }
+            }
+        );
+        return;
+    }
 
     let messageText = "";
         switch (state) {
@@ -452,6 +692,16 @@ bot.action("another_dish", async (ctx) => {
             await ctx.reply(messageText, keyboard);
         }
     }
+
+    // Уменьшаем счетчик бесплатных запросов, если нет подписки
+    if (!limitCheck.hasSubscription && (state === 1 || state === 2 || state === 3)) {
+        try {
+            await decrementFreeRequests(chatId);
+        } catch (error) {
+            console.error('Ошибка при уменьшении счетчика запросов:', error);
+        }
+    }
+
     await ctx.answerCbQuery();
 });
 
@@ -1758,11 +2008,49 @@ bot.action("start_bot", async (ctx) => {
 
 bot.on("message", async ctx => {
     const chatId = ctx.chat.id;
+    const username = ctx.from?.username;
     updateUserActivity(chatId);
+
+    // Обработка админ-панели
+    const adminState = getAdminState(chatId);
+    if (adminState && ctx.message.text && !ctx.message.text.startsWith('/')) {
+        if (isAdmin(username)) {
+            if (adminState === 'admin_awaiting_username_info') {
+                await processGetUserInfo(ctx, ctx.message.text);
+                setAdminState(chatId, null);
+                return;
+            } else if (adminState === 'admin_awaiting_free_requests') {
+                await processSetFreeRequests(ctx, ctx.message.text);
+                setAdminState(chatId, null);
+                return;
+            } else if (adminState === 'admin_awaiting_subscription') {
+                await processSetSubscription(ctx, ctx.message.text);
+                setAdminState(chatId, null);
+                return;
+            }
+        }
+    }
+
     const state = getUserState(chatId);
 
     // Обработка поискового запроса (state = 4)
     if (state === 4 && ctx.message.text && !ctx.message.text.startsWith('/')) {
+        // Проверяем лимит запросов
+        const limitCheck = await checkRequestLimit(chatId);
+        if (!limitCheck.allowed) {
+            await ctx.reply(
+                `❌ У вас закончились бесплатные запросы (0 осталось).\n\n` +
+                `💡 Для получения подписки обратитесь к администратору.`,
+                {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: "Вернуться в меню↩️", callback_data: "back_to_main" }]
+                        ]
+                    }
+                }
+            );
+            return;
+        }
         const searchQuery = ctx.message.text.trim();
         console.log('🔍 Получен поисковый запрос:', searchQuery, 'от пользователя', chatId);
         if (searchQuery) {
@@ -1799,6 +2087,15 @@ bot.on("message", async ctx => {
                     const recipeUrl = userHrefs.get(chatId)?.search;
                     const keyboard = recipeUrl ? await getDetailedMenuKeyboardWithFavorites(chatId, recipeUrl, recipeRequested, hasHistory) : getDetailedMenuKeyboard(recipeRequested, hasHistory, false);
                     await ctx.reply(searchResult, keyboard);
+
+                    // Уменьшаем счетчик бесплатных запросов, если нет подписки
+                    if (!limitCheck.hasSubscription) {
+                        try {
+                            await decrementFreeRequests(chatId);
+                        } catch (error) {
+                            console.error('Ошибка при уменьшении счетчика запросов:', error);
+                        }
+                    }
                 } else {
                     console.error('❌ Неожиданный результат поиска:', searchResult);
                     await ctx.reply('Произошла ошибка при поиске. Попробуйте позже.');

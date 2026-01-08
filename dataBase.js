@@ -104,7 +104,23 @@ export const initTables = async () => {
         UNIQUE(chat_id, recipe_url)
       )
     `);
-    console.log('✅ Команда CREATE TABLE выполнена');
+    console.log('✅ Команда CREATE TABLE favorites выполнена');
+
+    console.log('🔄 Создание таблицы users...');
+
+    // Создаем таблицу пользователей (если не существует)
+    await query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        chat_id BIGINT NOT NULL UNIQUE,
+        username VARCHAR(255),
+        free_requests INTEGER DEFAULT 0,
+        subscription_end_date TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Команда CREATE TABLE users выполнена');
 
     // Создаем индексы (если не существуют)
     console.log('🔄 Создание индексов...');
@@ -116,6 +132,16 @@ export const initTables = async () => {
     await query(`
       CREATE INDEX IF NOT EXISTS idx_favorites_added_at
       ON favorites(added_at DESC)
+    `);
+
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_users_chat_id
+      ON users(chat_id)
+    `);
+
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_users_username
+      ON users(username)
     `);
 
     console.log('✅ Таблицы БД инициализированы');

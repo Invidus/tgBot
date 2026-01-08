@@ -144,6 +144,6 @@ export function parseWebhookEvent(event) {
   return null;
 }
 
-// Экспорт для проверки тестового режима
-export const isTestMode = config.yookassa.isTestMode || false;
+// Экспорт для проверки тестового режима (переиспользуем уже объявленную переменную)
+export { isTestMode };
 

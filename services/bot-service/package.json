@@ -9,8 +9,7 @@
   "dependencies": {
     "telegraf": "^4.16.3",
     "ioredis": "^5.3.2",
-    "axios": "^1.7.2",
-    "@yookassa/sdk": "^2.0.0"
+    "axios": "^1.7.2"
   }
 }
 

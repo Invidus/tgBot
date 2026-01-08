@@ -1,4 +1,4 @@
-import { Client } from '@yookassa/sdk';
+import axios from 'axios';
 import { config } from '../shared/config.js';
 import { randomUUID } from 'node:crypto';
 
@@ -8,19 +8,16 @@ if (!shopId || !secretKey) {
   console.warn('⚠️ YooKassa credentials not configured. Payment features will be disabled.');
 }
 
-// Инициализация SDK ЮKassa
-let yookassaClient = null;
+// Базовый URL API YooKassa
+const YOOKASSA_API_URL = isTestMode
+  ? 'https://api.yookassa.ru/v3'
+  : 'https://api.yookassa.ru/v3';
 
-if (shopId && secretKey) {
-  try {
-    yookassaClient = new Client({
-      shopId,
-      secretKey
-    });
-  } catch (error) {
-    console.error('Ошибка инициализации YooKassa:', error);
-  }
-}
+// Функция для создания базовой авторизации
+const getAuthHeader = () => {
+  const credentials = Buffer.from(`${shopId}:${secretKey}`).toString('base64');
+  return `Basic ${credentials}`;
+};
 
 /**
  * Создание платежа через ЮKassa
@@ -32,27 +29,41 @@ if (shopId && secretKey) {
  * @returns {Promise<Object>} - Данные платежа с confirmation_url
  */
 export async function createPayment({ amount, description, paymentId, metadata }) {
-  if (!yookassaClient) {
+  if (!shopId || !secretKey) {
     throw new Error('YooKassa не настроен');
   }
 
   try {
-    const payment = await yookassaClient.createPayment({
-      amount: {
-        value: amount.toFixed(2),
-        currency: 'RUB'
+    const idempotenceKey = randomUUID();
+    const response = await axios.post(
+      `${YOOKASSA_API_URL}/payments`,
+      {
+        amount: {
+          value: amount.toFixed(2),
+          currency: 'RUB'
+        },
+        confirmation: {
+          type: 'redirect',
+          return_url: `https://t.me/your_bot` // URL для возврата после оплаты
+        },
+        capture: true,
+        description: description,
+        metadata: {
+          paymentId,
+          ...metadata
+        }
       },
-      confirmation: {
-        type: 'redirect',
-        return_url: `https://t.me/your_bot` // URL для возврата после оплаты (будет обновлен в обработчике)
-      },
-      capture: true,
-      description: description,
-      metadata: {
-        paymentId,
-        ...metadata
+      {
+        headers: {
+          'Authorization': getAuthHeader(),
+          'Idempotence-Key': idempotenceKey,
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000
       }
-    }, randomUUID());
+    );
+
+    const payment = response.data;
 
     return {
       id: payment.id,
@@ -62,7 +73,7 @@ export async function createPayment({ amount, description, paymentId, metadata }
       description: payment.description
     };
   } catch (error) {
-    console.error('Ошибка создания платежа в YooKassa:', error);
+    console.error('Ошибка создания платежа в YooKassa:', error.response?.data || error.message);
     throw error;
   }
 }
@@ -73,12 +84,24 @@ export async function createPayment({ amount, description, paymentId, metadata }
  * @returns {Promise<Object>} - Данные платежа
  */
 export async function getPayment(paymentId) {
-  if (!yookassaClient) {
+  if (!shopId || !secretKey) {
     throw new Error('YooKassa не настроен');
   }
 
   try {
-    const payment = await yookassaClient.getPayment(paymentId);
+    const response = await axios.get(
+      `${YOOKASSA_API_URL}/payments/${paymentId}`,
+      {
+        headers: {
+          'Authorization': getAuthHeader(),
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000
+      }
+    );
+
+    const payment = response.data;
+
     return {
       id: payment.id,
       status: payment.status,
@@ -89,7 +112,7 @@ export async function getPayment(paymentId) {
       captured_at: payment.captured_at
     };
   } catch (error) {
-    console.error('Ошибка получения платежа из YooKassa:', error);
+    console.error('Ошибка получения платежа из YooKassa:', error.response?.data || error.message);
     throw error;
   }
 }
@@ -121,5 +144,6 @@ export function parseWebhookEvent(event) {
   return null;
 }
 
-export { isTestMode };
+// Экспорт для проверки тестового режима
+export const isTestMode = config.yookassa.isTestMode || false;
 

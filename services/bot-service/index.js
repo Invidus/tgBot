@@ -2465,9 +2465,39 @@ bot.action("start_bot", async (ctx) => {
   await ctx.answerCbQuery();
 });
 
-// Обработчик текстовых сообщений (поиск)
+// Обработчик текстовых сообщений (поиск и админ-панель)
 bot.on("message", async (ctx) => {
   const chatId = ctx.chat.id;
+
+  // Проверяем состояние админ-панели
+  const adminState = getAdminState(chatId);
+  if (adminState && ctx.message.text && !ctx.message.text.startsWith('/')) {
+    const username = ctx.from?.username;
+    if (!isAdmin(username)) {
+      setAdminState(chatId, null);
+      return;
+    }
+
+    const text = ctx.message.text.trim();
+
+    switch (adminState) {
+      case 'admin_awaiting_username_info':
+        await processGetUserInfo(ctx, text, databaseServiceUrl);
+        setAdminState(chatId, null);
+        return;
+
+      case 'admin_awaiting_free_requests':
+        await processSetFreeRequests(ctx, text, databaseServiceUrl);
+        setAdminState(chatId, null);
+        return;
+
+      case 'admin_awaiting_subscription':
+        await processSetSubscription(ctx, text, databaseServiceUrl);
+        setAdminState(chatId, null);
+        return;
+    }
+  }
+
   const state = await getUserState(chatId);
 
   if (state === 4 && ctx.message.text && !ctx.message.text.startsWith('/')) {

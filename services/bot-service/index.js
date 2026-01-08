@@ -344,14 +344,17 @@ const getRequestCount = async (chatId) => {
 // Увеличение счетчика запросов
 const incrementRequestCount = async (chatId) => {
   try {
+    console.log(`📊 Увеличение счетчика запросов для chatId=${chatId}`);
     const response = await axios.post(`${databaseServiceUrl}/request-counts/${chatId}/increment`, {}, {
       timeout: 10000,
       headers: { 'Content-Type': 'application/json' }
     });
-    return response.data.requestCount || { request_count: 0 };
+    const result = response.data.requestCount || { request_count: 0 };
+    console.log(`✅ Счетчик успешно увеличен для chatId=${chatId}, новое значение: ${result.request_count}`);
+    return result;
   } catch (error) {
-    console.error('Ошибка увеличения счетчика запросов:', error.message);
-    return { request_count: 0 };
+    console.error(`❌ Ошибка увеличения счетчика запросов для chatId=${chatId}:`, error.response?.data || error.message);
+    throw error; // Пробрасываем ошибку дальше, чтобы обработчики могли её обработать
   }
 };
 
@@ -361,6 +364,7 @@ const checkRequestLimit = async (chatId) => {
 
   // Если есть активная подписка, лимит не применяется
   if (hasSubscription) {
+    console.log(`✅ Проверка лимита для chatId=${chatId}: есть активная подписка, лимит не применяется`);
     return { allowed: true, remaining: Infinity };
   }
 
@@ -369,7 +373,10 @@ const checkRequestLimit = async (chatId) => {
   const currentCount = requestCount.request_count || 0;
   const remaining = FREE_REQUESTS_LIMIT - currentCount;
 
+  console.log(`📊 Проверка лимита для chatId=${chatId}: использовано ${currentCount}/${FREE_REQUESTS_LIMIT}, осталось ${remaining}`);
+
   if (remaining <= 0) {
+    console.log(`❌ Лимит исчерпан для chatId=${chatId}`);
     return { allowed: false, remaining: 0 };
   }
 
@@ -458,10 +465,10 @@ bot.action("breakfast", async (ctx) => {
   // Проверяем лимит запросов
   const limitCheck = await checkRequestLimit(chatId);
   if (!limitCheck.allowed) {
-    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT}/день). Купите подписку для неограниченного доступа!`);
+    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT} всего). Купите подписку для неограниченного доступа!`);
     const subscriptionKeyboard = getSubscriptionInfoKeyboard();
     await ctx.reply(
-      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} в день).\n\n` +
+      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} всего).\n\n` +
       `💳 Купите подписку для неограниченного доступа к рецептам!`,
       subscriptionKeyboard
     );
@@ -473,7 +480,12 @@ bot.action("breakfast", async (ctx) => {
   try {
     const result = await getRecipeFromParser('breakfast', chatId);
     // Увеличиваем счетчик запросов только после успешного получения рецепта
-    await incrementRequestCount(chatId);
+    try {
+      const incremented = await incrementRequestCount(chatId);
+      console.log(`✅ breakfast: счетчик увеличен, текущее значение: ${incremented.request_count}`);
+    } catch (error) {
+      console.error('❌ Ошибка увеличения счетчика запросов:', error.message);
+    }
     await setUserHref(chatId, 'breakfast', result.url);
     await setRecipeRequested(chatId, 'breakfast', false);
 
@@ -509,10 +521,10 @@ bot.action("dinner", async (ctx) => {
   // Проверяем лимит запросов
   const limitCheck = await checkRequestLimit(chatId);
   if (!limitCheck.allowed) {
-    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT}/день). Купите подписку для неограниченного доступа!`);
+    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT} всего). Купите подписку для неограниченного доступа!`);
     const subscriptionKeyboard = getSubscriptionInfoKeyboard();
     await ctx.reply(
-      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} в день).\n\n` +
+      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} всего).\n\n` +
       `💳 Купите подписку для неограниченного доступа к рецептам!`,
       subscriptionKeyboard
     );
@@ -536,7 +548,12 @@ bot.action("dinner", async (ctx) => {
   try {
     const result = await getRecipeFromParser('dinner', chatId);
     // Увеличиваем счетчик запросов только после успешного получения рецепта
-    await incrementRequestCount(chatId);
+    try {
+      const incremented = await incrementRequestCount(chatId);
+      console.log(`✅ dinner: счетчик увеличен, текущее значение: ${incremented.request_count}`);
+    } catch (error) {
+      console.error('❌ Ошибка увеличения счетчика запросов:', error.message);
+    }
     await setUserHref(chatId, 'dinner', result.url);
     await setRecipeRequested(chatId, 'dinner', false);
 
@@ -572,10 +589,10 @@ bot.action("lunch", async (ctx) => {
   // Проверяем лимит запросов
   const limitCheck = await checkRequestLimit(chatId);
   if (!limitCheck.allowed) {
-    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT}/день). Купите подписку для неограниченного доступа!`);
+    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT} всего). Купите подписку для неограниченного доступа!`);
     const subscriptionKeyboard = getSubscriptionInfoKeyboard();
     await ctx.reply(
-      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} в день).\n\n` +
+      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} всего).\n\n` +
       `💳 Купите подписку для неограниченного доступа к рецептам!`,
       subscriptionKeyboard
     );
@@ -599,7 +616,12 @@ bot.action("lunch", async (ctx) => {
   try {
     const result = await getRecipeFromParser('lunch', chatId);
     // Увеличиваем счетчик запросов только после успешного получения рецепта
-    await incrementRequestCount(chatId);
+    try {
+      const incremented = await incrementRequestCount(chatId);
+      console.log(`✅ lunch: счетчик увеличен, текущее значение: ${incremented.request_count}`);
+    } catch (error) {
+      console.error('❌ Ошибка увеличения счетчика запросов:', error.message);
+    }
     await setUserHref(chatId, 'lunch', result.url);
     await setRecipeRequested(chatId, 'lunch', false);
 
@@ -927,10 +949,10 @@ bot.action("another_dish", async (ctx) => {
   // Проверяем лимит запросов
   const limitCheck = await checkRequestLimit(chatId);
   if (!limitCheck.allowed) {
-    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT}/день). Купите подписку для неограниченного доступа!`);
+    await ctx.answerCbQuery(`❌ Лимит бесплатных запросов исчерпан (${FREE_REQUESTS_LIMIT} всего). Купите подписку для неограниченного доступа!`);
     const subscriptionKeyboard = getSubscriptionInfoKeyboard();
     await ctx.reply(
-      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} в день).\n\n` +
+      `❌ Вы исчерпали лимит бесплатных запросов (${FREE_REQUESTS_LIMIT} всего).\n\n` +
       `💳 Купите подписку для неограниченного доступа к рецептам!`,
       subscriptionKeyboard
     );
@@ -973,15 +995,20 @@ bot.action("another_dish", async (ctx) => {
       break;
     }
 
-    // Увеличиваем счетчик запросов только после успешного получения рецепта
-    await incrementRequestCount(chatId);
-    console.log(`✅ another_dish: получен результат, url=${result.url}`);
-
     // Проверяем, не совпадает ли новый рецепт с текущим (до обновления в Redis)
     if (prevUrl === result.url && currentMessage) {
-      // Если рецепт тот же, просто уведомляем пользователя
+      // Если рецепт тот же, просто уведомляем пользователя (без увеличения счетчика)
       await ctx.answerCbQuery("Это то же самое блюдо. Попробуйте еще раз.");
       return;
+    }
+
+    // Увеличиваем счетчик запросов только после успешного получения РАЗНОГО рецепта
+    try {
+      const incremented = await incrementRequestCount(chatId);
+      console.log(`✅ another_dish: счетчик увеличен, текущее значение: ${incremented.request_count}, url=${result.url}`);
+    } catch (error) {
+      console.error('❌ Ошибка увеличения счетчика запросов:', error.message);
+      // Продолжаем выполнение даже при ошибке счетчика
     }
 
     await setUserHref(chatId, dishType, result.url);
@@ -2177,7 +2204,12 @@ bot.on("message", async (ctx) => {
         }
 
         // Увеличиваем счетчик запросов только после успешного получения рецепта
-        await incrementRequestCount(chatId);
+        try {
+          const incremented = await incrementRequestCount(chatId);
+          console.log(`✅ search: счетчик увеличен, текущее значение: ${incremented.request_count}`);
+        } catch (error) {
+          console.error('❌ Ошибка увеличения счетчика запросов:', error.message);
+        }
         await setUserHref(chatId, 'search', result.url);
         await setRecipeRequested(chatId, 'search', false);
 

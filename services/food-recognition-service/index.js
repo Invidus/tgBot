@@ -33,8 +33,10 @@ const hf = hasToken
   ? new HfInference(HUGGINGFACE_TOKEN)
   : new HfInference();
 
-// Модель для распознавания еды (бесплатная)
+// Модель для распознавания еды
+// Пробуем несколько вариантов моделей
 const FOOD_MODEL = process.env.FOOD_MODEL || 'nateraw/food-image-classification';
+const ALTERNATIVE_MODEL = 'microsoft/resnet-50'; // Альтернативная модель для классификации изображений
 
 console.log(`🔧 Конфигурация Hugging Face:`);
 console.log(`   - Модель: ${FOOD_MODEL}`);
@@ -86,7 +88,8 @@ async function recognizeFood(imageUrl) {
       console.log(`📤 Способ 1: Прямой HTTP запрос с бинарными данными...`);
       console.log(`🔑 Токен: ${hasToken ? 'используется' : 'не указан'}`);
 
-      const apiUrl = `https://router.huggingface.co/models/${FOOD_MODEL}`;
+      // Пробуем сначала старый endpoint (может все еще работать)
+      let apiUrl = `https://api-inference.huggingface.co/models/${FOOD_MODEL}`;
       const headers = {
         'Content-Type': 'image/jpeg',
         'Accept': 'application/json'
@@ -99,20 +102,24 @@ async function recognizeFood(imageUrl) {
         console.warn(`⚠️ Запрос отправляется без токена - это может вызвать ошибки`);
       }
 
-      console.log(`📤 Отправка HTTP запроса к ${apiUrl}`);
+      console.log(`📤 Попытка 1: Отправка HTTP запроса к ${apiUrl}`);
       console.log(`📋 Заголовки:`, Object.keys(headers).join(', '));
 
-      const httpResponse = await axios.post(apiUrl, imageBuffer, {
-        headers: headers,
-        timeout: 60000, // Увеличиваем таймаут до 60 секунд
-        responseType: 'json',
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-        validateStatus: (status) => {
-          // Принимаем статусы 200-299 и 503 (модель загружается)
-          return (status >= 200 && status < 300) || status === 503;
-        }
-      });
+      let httpResponse;
+      let useOldEndpoint = true;
+
+      try {
+        httpResponse = await axios.post(apiUrl, imageBuffer, {
+          headers: headers,
+          timeout: 60000, // Увеличиваем таймаут до 60 секунд
+          responseType: 'json',
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+          validateStatus: (status) => {
+            // Принимаем статусы 200-299 и 503 (модель загружается)
+            return (status >= 200 && status < 300) || status === 503;
+          }
+        });
 
       console.log(`📥 Получен ответ от API, статус: ${httpResponse.status}`);
       console.log(`📋 Данные ответа:`, JSON.stringify(httpResponse.data).substring(0, 200));
@@ -158,6 +165,73 @@ async function recognizeFood(imageUrl) {
       }
 
       console.log(`✅ Результат от Hugging Face получен (через HTTP), количество результатов: ${result?.length || 0}`);
+      } catch (oldEndpointError) {
+        const oldStatus = oldEndpointError.response?.status;
+        const oldErrorData = oldEndpointError.response?.data;
+
+        // Если старый endpoint вернул 410 (deprecated) или 404, пробуем новый router
+        if (oldStatus === 410 || oldStatus === 404 || (oldErrorData && typeof oldErrorData === 'string' && oldErrorData.includes('no longer supported'))) {
+          console.log(`⚠️ Старый endpoint не работает (${oldStatus}), пробуем новый router...`);
+
+          // Пробуем новый router endpoint
+          apiUrl = `https://router.huggingface.co/models/${FOOD_MODEL}`;
+          console.log(`📤 Попытка 2: Отправка HTTP запроса к ${apiUrl}`);
+
+          try {
+            httpResponse = await axios.post(apiUrl, imageBuffer, {
+              headers: headers,
+              timeout: 60000,
+              responseType: 'json',
+              maxContentLength: Infinity,
+              maxBodyLength: Infinity,
+              validateStatus: (status) => {
+                return (status >= 200 && status < 300) || status === 503;
+              }
+            });
+
+            // Обрабатываем ответ так же, как для старого endpoint
+            if (httpResponse.status === 503 || (httpResponse.data?.error &&
+                (httpResponse.data.error.includes('loading') ||
+                 httpResponse.data.error.includes('model is currently loading')))) {
+              const waitTime = httpResponse.data?.estimated_time ?
+                Math.ceil(httpResponse.data.estimated_time) * 1000 : 20000;
+              console.log(`⏳ Модель загружается, ждем ${waitTime/1000} секунд...`);
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+
+              const retryResponse = await axios.post(apiUrl, imageBuffer, {
+                headers: headers,
+                timeout: 60000,
+                responseType: 'json',
+                validateStatus: (status) => status >= 200 && status < 300
+              });
+
+              if (retryResponse.data?.error) {
+                throw new Error(`Модель недоступна после ожидания: ${retryResponse.data.error}`);
+              }
+
+              if (!retryResponse.data || !Array.isArray(retryResponse.data)) {
+                throw new Error('Неверный формат ответа от API после повтора');
+              }
+
+              result = retryResponse.data;
+            } else if (httpResponse.data?.error) {
+              throw new Error(`Ошибка API: ${httpResponse.data.error}`);
+            } else if (!httpResponse.data || !Array.isArray(httpResponse.data)) {
+              throw new Error(`Неверный формат ответа от API. Получено: ${typeof httpResponse.data}`);
+            } else {
+              result = httpResponse.data;
+            }
+
+            console.log(`✅ Результат от Hugging Face получен (через новый router), количество результатов: ${result?.length || 0}`);
+          } catch (routerError) {
+            // Если и новый router не работает, пробуем альтернативную модель
+            console.log(`⚠️ Новый router тоже не работает, пробуем альтернативную модель ${ALTERNATIVE_MODEL}...`);
+            throw oldEndpointError; // Пробрасываем оригинальную ошибку для дальнейшей обработки
+          }
+        } else {
+          throw oldEndpointError;
+        }
+      }
     } catch (httpError) {
       const statusCode = httpError.response?.status;
       const errorData = httpError.response?.data;

@@ -1123,6 +1123,72 @@ app.get('/users/:chatId/ai-requests/info', async (req, res) => {
   }
 });
 
+// Сброс ИИ запросов для конкретного пользователя (при оформлении подписки)
+app.post('/users/:chatId/ai-requests/reset', async (req, res) => {
+  try {
+    const chatId = parseInt(req.params.chatId);
+    const today = new Date().toISOString().split('T')[0];
+
+    // Удаляем запись за сегодня из истории (если есть)
+    await pool.query(
+      'DELETE FROM ai_requests_history WHERE chat_id = $1 AND request_date = $2',
+      [chatId, today]
+    );
+
+    res.json({
+      success: true,
+      message: 'ИИ запросы сброшены'
+    });
+  } catch (error) {
+    console.error('Ошибка сброса ИИ запросов:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Ежедневный сброс ИИ запросов для всех пользователей с активной подпиской
+app.post('/ai-requests/reset-daily', async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+    // Получаем всех пользователей с активной подпиской
+    const usersResult = await pool.query(
+      `SELECT DISTINCT chat_id FROM users
+       WHERE subscription_end_date IS NOT NULL
+       AND subscription_end_date > CURRENT_TIMESTAMP`
+    );
+
+    let resetCount = 0;
+
+    // Удаляем записи за вчерашний день для всех пользователей с активной подпиской
+    // (это не обязательно, так как счетчик работает по дате, но можно очистить старые записи)
+    for (const user of usersResult.rows) {
+      // Удаляем старые записи (старше 7 дней) для экономии места
+      await pool.query(
+        'DELETE FROM ai_requests_history WHERE chat_id = $1 AND request_date < CURRENT_DATE - INTERVAL \'7 days\'',
+        [user.chat_id]
+      );
+      resetCount++;
+    }
+
+    // Также удаляем старые записи для всех пользователей (старше 30 дней)
+    await pool.query(
+      'DELETE FROM ai_requests_history WHERE request_date < CURRENT_DATE - INTERVAL \'30 days\''
+    );
+
+    res.json({
+      success: true,
+      resetCount: resetCount,
+      message: `Ежедневный сброс выполнен для ${resetCount} пользователей`
+    });
+  } catch (error) {
+    console.error('Ошибка ежедневного сброса ИИ запросов:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
 // Health check
 app.get('/health', async (req, res) => {
   try {

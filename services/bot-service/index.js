@@ -461,6 +461,20 @@ const getAiRequestsInfo = async (chatId) => {
   }
 };
 
+// Функция для сброса ИИ запросов (при оформлении подписки)
+const resetAiRequests = async (chatId) => {
+  try {
+    const response = await axios.post(`${databaseServiceUrl}/users/${chatId}/ai-requests/reset`, {}, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Ошибка сброса ИИ запросов:', error.message);
+    throw error;
+  }
+};
+
 // Создание подписки
 const createSubscription = async (chatId, subscriptionType, months) => {
   try {
@@ -2416,12 +2430,6 @@ bot.action("back_to_main", async (ctx) => {
 
   const freeRequests = user?.free_requests || 0;
 
-  // Получаем информацию об ИИ запросах для подписчиков
-  let aiInfo = null;
-  if (hasActiveSub) {
-    aiInfo = await getAiRequestsInfo(chatId);
-  }
-
   const mainMenuKeyboard = {
     reply_markup: {
       inline_keyboard: [
@@ -2440,8 +2448,6 @@ bot.action("back_to_main", async (ctx) => {
   let messageText = "Выберите что хотите приготовить или выполните поиск по продукту";
   if (!hasActiveSub) {
     messageText += `\n\n📊 Бесплатных запросов: ${freeRequests}`;
-  } else if (aiInfo) {
-    messageText += `\n\n🤖 ИИ запросов сегодня: ${aiInfo.aiRequestsRemaining}/5`;
   }
 
   try {
@@ -2556,12 +2562,6 @@ bot.action("start_bot", async (ctx) => {
 
   const freeRequests = user?.free_requests || 0;
 
-  // Получаем информацию об ИИ запросах для подписчиков
-  let aiInfo = null;
-  if (hasActiveSub) {
-    aiInfo = await getAiRequestsInfo(chatId);
-  }
-
   await ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️', {
     reply_markup: {
       remove_keyboard: true
@@ -2571,8 +2571,6 @@ bot.action("start_bot", async (ctx) => {
   let menuText = "Выберите что хотите приготовить или выполните поиск по продукту";
   if (!hasActiveSub) {
     menuText += `\n\n📊 Бесплатных запросов: ${freeRequests}`;
-  } else if (aiInfo) {
-    menuText += `\n\n🤖 ИИ запросов сегодня: ${aiInfo.aiRequestsRemaining}/5`;
   }
 
   await ctx.reply(menuText, {
@@ -3255,11 +3253,30 @@ bot.on('successful_payment', async (ctx) => {
     try {
       await createSubscription(chatId, dbPayment.subscription_type, dbPayment.months);
 
-      const message = `✅ **Подписка активирована!**\n\n` +
-                     `📅 Срок действия: ${dbPayment.months} ${dbPayment.months === 1 ? 'месяц' : dbPayment.months < 5 ? 'месяца' : 'месяцев'}\n` +
-                     `💰 Сумма: ${dbPayment.amount}₽\n` +
-                     `🆔 ID транзакции: ${yookassaPaymentId}\n\n` +
-                     `🎉 Теперь у вас неограниченный доступ к рецептам!`;
+      // Сбрасываем счетчик ИИ запросов при оформлении подписки
+      try {
+        await resetAiRequests(chatId);
+        console.log(`✅ ИИ запросы сброшены для пользователя ${chatId} при оформлении подписки`);
+      } catch (error) {
+        console.error('Ошибка сброса ИИ запросов при оформлении подписки:', error);
+        // Не прерываем процесс активации подписки, если сброс не удался
+      }
+
+      const message = `🎉 **Подписка успешно активирована!**\n\n` +
+                     `Спасибо за ваш выбор! Теперь у вас есть полный доступ ко всем возможностям бота:\n\n` +
+                     `✨ **Неограниченный доступ к рецептам**\n` +
+                     `   • Завтраки, обеды, ужины без ограничений\n` +
+                     `   • Поиск по любым продуктам\n` +
+                     `   • Сохранение в избранное\n\n` +
+                     `🤖 **ИИ распознавание блюд по фото**\n` +
+                     `   • Определение названия блюда\n` +
+                     `   • Подсчет калорий и БЖУ (белки, жиры, углеводы)\n` +
+                     `   • 5 запросов в день (обновляются ежедневно)\n\n` +
+                     `📊 **Детали подписки:**\n` +
+                     `   📅 Срок действия: ${dbPayment.months} ${dbPayment.months === 1 ? 'месяц' : dbPayment.months < 5 ? 'месяца' : 'месяцев'}\n` +
+                     `   💰 Сумма: ${dbPayment.amount}₽\n` +
+                     `   🆔 ID транзакции: ${yookassaPaymentId}\n\n` +
+                     `🚀 Приятного использования! Начните с главного меню.`;
 
       await ctx.reply(message, {
         parse_mode: 'Markdown',
@@ -3310,10 +3327,69 @@ const sendSubscriptionExpiryNotifications = async () => {
   }
 };
 
+// Функция для ежедневного сброса ИИ запросов в 00:00 МСК
+const resetDailyAiRequests = async () => {
+  try {
+    const response = await axios.post(`${databaseServiceUrl}/ai-requests/reset-daily`, {}, {
+      timeout: 30000,
+      headers: { 'Content-Type': 'application/json' }
+    });
+    console.log(`✅ Ежедневный сброс ИИ запросов выполнен: ${response.data.resetCount || 0} пользователей`);
+  } catch (error) {
+    console.error('Ошибка ежедневного сброса ИИ запросов:', error.message);
+  }
+};
+
+// Функция для расчета времени до следующего сброса (00:00 МСК)
+const getTimeUntilNextReset = () => {
+  const now = new Date();
+
+  // МСК = UTC+3 (или UTC+2 в летнее время, но для простоты используем UTC+3)
+  // Получаем текущее время в UTC
+  const utcNow = now.getTime();
+
+  // МСК offset: +3 часа = 3 * 60 * 60 * 1000 мс
+  const moscowOffset = 3 * 60 * 60 * 1000;
+  const moscowTime = new Date(utcNow + moscowOffset);
+
+  // Создаем объект для времени сброса (00:00 МСК)
+  const resetTimeMoscow = new Date(moscowTime);
+  resetTimeMoscow.setUTCHours(0, 0, 0, 0);
+
+  // Если уже прошло 00:00 МСК сегодня, устанавливаем на завтра
+  if (moscowTime.getTime() >= resetTimeMoscow.getTime()) {
+    resetTimeMoscow.setUTCDate(resetTimeMoscow.getUTCDate() + 1);
+  }
+
+  // Конвертируем обратно в UTC
+  const resetTimeUTC = resetTimeMoscow.getTime() - moscowOffset;
+
+  // Возвращаем разницу во времени
+  return resetTimeUTC - utcNow;
+};
+
 // Запускаем периодическую проверку истекающих подписок (каждый час)
 setInterval(() => {
   sendSubscriptionExpiryNotifications().catch(console.error);
 }, 60 * 60 * 1000); // Каждый час
+
+// Запускаем ежедневный сброс ИИ запросов в 00:00 МСК
+const scheduleDailyReset = () => {
+  const timeUntilReset = getTimeUntilNextReset();
+
+  console.log(`⏰ Следующий сброс ИИ запросов через ${Math.round(timeUntilReset / 1000 / 60)} минут`);
+
+  setTimeout(() => {
+    resetDailyAiRequests();
+    // Планируем следующий сброс на завтра в 00:00 МСК
+    setInterval(() => {
+      resetDailyAiRequests();
+    }, 24 * 60 * 60 * 1000); // Каждые 24 часа
+  }, timeUntilReset);
+};
+
+// Запускаем планировщик сброса
+scheduleDailyReset();
 
 // Graceful shutdown
 const shutdown = async (signal) => {

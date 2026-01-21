@@ -86,7 +86,7 @@ async function recognizeFood(imageUrl) {
       console.log(`📤 Способ 1: Прямой HTTP запрос с бинарными данными...`);
       console.log(`🔑 Токен: ${hasToken ? 'используется' : 'не указан'}`);
 
-      const apiUrl = `https://api-inference.huggingface.co/models/${FOOD_MODEL}`;
+      const apiUrl = `https://router.huggingface.co/models/${FOOD_MODEL}`;
       const headers = {
         'Content-Type': 'image/jpeg',
         'Accept': 'application/json'

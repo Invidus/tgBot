@@ -929,7 +929,7 @@ app.get('/users/:chatId/ai-requests/check', async (req, res) => {
     const chatId = parseInt(req.params.chatId);
     const today = new Date().toISOString().split('T')[0];
 
-    // Проверяем подписку
+    // Проверяем подписку из таблицы users
     const userResult = await pool.query(
       'SELECT subscription_end_date FROM users WHERE chat_id = $1',
       [chatId]
@@ -940,7 +940,25 @@ app.get('/users/:chatId/ai-requests/check', async (req, res) => {
     }
 
     const user = userResult.rows[0];
-    const hasSubscription = user.subscription_end_date && new Date(user.subscription_end_date) > new Date();
+    let hasSubscription = user.subscription_end_date && new Date(user.subscription_end_date) > new Date();
+
+    // Если нет подписки в users, проверяем таблицу subscriptions
+    if (!hasSubscription) {
+      const subscriptionResult = await pool.query(
+        `SELECT * FROM subscriptions
+         WHERE chat_id = $1 AND is_active = TRUE
+         ORDER BY end_date DESC
+         LIMIT 1`,
+        [chatId]
+      );
+
+      if (subscriptionResult.rows.length > 0) {
+        const subscription = subscriptionResult.rows[0];
+        const now = new Date();
+        const endDate = new Date(subscription.end_date);
+        hasSubscription = endDate > now && subscription.is_active;
+      }
+    }
 
     if (!hasSubscription) {
       return res.json({
@@ -1099,7 +1117,25 @@ app.get('/users/:chatId/ai-requests/info', async (req, res) => {
     }
 
     const user = userResult.rows[0];
-    const hasSubscription = user.subscription_end_date && new Date(user.subscription_end_date) > new Date();
+    let hasSubscription = user.subscription_end_date && new Date(user.subscription_end_date) > new Date();
+
+    // Если нет подписки в users, проверяем таблицу subscriptions
+    if (!hasSubscription) {
+      const subscriptionResult = await pool.query(
+        `SELECT * FROM subscriptions
+         WHERE chat_id = $1 AND is_active = TRUE
+         ORDER BY end_date DESC
+         LIMIT 1`,
+        [chatId]
+      );
+
+      if (subscriptionResult.rows.length > 0) {
+        const subscription = subscriptionResult.rows[0];
+        const now = new Date();
+        const endDate = new Date(subscription.end_date);
+        hasSubscription = endDate > now && subscription.is_active;
+      }
+    }
 
     const historyResult = await pool.query(
       'SELECT request_count FROM ai_requests_history WHERE chat_id = $1 AND request_date = $2',

@@ -11,9 +11,22 @@ const PORT = process.env.PORT || 3004;
 const HUGGINGFACE_TOKEN = process.env.HUGGINGFACE_API_TOKEN;
 const hasToken = !!HUGGINGFACE_TOKEN;
 
+// Диагностика токена
 if (!hasToken) {
   console.warn('⚠️ HUGGINGFACE_API_TOKEN не указан! Некоторые модели могут требовать токен для работы.');
   console.warn('💡 Получите токен на https://huggingface.co/settings/tokens');
+  console.warn('💡 Добавьте токен в .env файл: HUGGINGFACE_API_TOKEN=ваш_токен');
+} else {
+  // Показываем первые и последние символы токена для диагностики (безопасно)
+  const tokenPreview = HUGGINGFACE_TOKEN.length > 10
+    ? `${HUGGINGFACE_TOKEN.substring(0, 4)}...${HUGGINGFACE_TOKEN.substring(HUGGINGFACE_TOKEN.length - 4)}`
+    : '***';
+  console.log(`✅ Токен Hugging Face загружен: ${tokenPreview} (длина: ${HUGGINGFACE_TOKEN.length})`);
+
+  // Проверяем формат токена
+  if (!HUGGINGFACE_TOKEN.startsWith('hf_')) {
+    console.warn('⚠️ Токен не начинается с "hf_" - убедитесь, что это правильный токен Hugging Face');
+  }
 }
 
 const hf = hasToken
@@ -26,6 +39,7 @@ const FOOD_MODEL = process.env.FOOD_MODEL || 'nateraw/food-image-classification'
 console.log(`🔧 Конфигурация Hugging Face:`);
 console.log(`   - Модель: ${FOOD_MODEL}`);
 console.log(`   - Токен: ${hasToken ? 'указан' : 'не указан'}`);
+console.log(`   - Переменная окружения HUGGINGFACE_API_TOKEN: ${process.env.HUGGINGFACE_API_TOKEN ? 'установлена' : 'не установлена'}`);
 
 /**
  * Распознавание блюда по фото через Hugging Face
@@ -74,47 +88,71 @@ async function recognizeFood(imageUrl) {
 
       const apiUrl = `https://api-inference.huggingface.co/models/${FOOD_MODEL}`;
       const headers = {
-        'Content-Type': 'image/jpeg'
+        'Content-Type': 'image/jpeg',
+        'Accept': 'application/json'
       };
 
       if (hasToken) {
         headers['Authorization'] = `Bearer ${HUGGINGFACE_TOKEN}`;
+        console.log(`🔑 Используется токен для авторизации`);
+      } else {
+        console.warn(`⚠️ Запрос отправляется без токена - это может вызвать ошибки`);
       }
 
       console.log(`📤 Отправка HTTP запроса к ${apiUrl}`);
+      console.log(`📋 Заголовки:`, Object.keys(headers).join(', '));
 
       const httpResponse = await axios.post(apiUrl, imageBuffer, {
         headers: headers,
         timeout: 60000, // Увеличиваем таймаут до 60 секунд
         responseType: 'json',
         maxContentLength: Infinity,
-        maxBodyLength: Infinity
+        maxBodyLength: Infinity,
+        validateStatus: (status) => {
+          // Принимаем статусы 200-299 и 503 (модель загружается)
+          return (status >= 200 && status < 300) || status === 503;
+        }
       });
 
+      console.log(`📥 Получен ответ от API, статус: ${httpResponse.status}`);
+      console.log(`📋 Данные ответа:`, JSON.stringify(httpResponse.data).substring(0, 200));
+
       // Проверяем, может быть модель еще загружается
-      if (httpResponse.data?.error) {
-        const errorMsg = httpResponse.data.error;
-        if (errorMsg.includes('loading') || errorMsg.includes('model is currently loading')) {
-          console.log(`⏳ Модель загружается, ждем 10 секунд...`);
-          await new Promise(resolve => setTimeout(resolve, 10000));
+      if (httpResponse.status === 503 || (httpResponse.data?.error &&
+          (httpResponse.data.error.includes('loading') ||
+           httpResponse.data.error.includes('model is currently loading') ||
+           httpResponse.data.error.includes('is currently loading')))) {
+        const waitTime = httpResponse.data?.estimated_time ?
+          Math.ceil(httpResponse.data.estimated_time) * 1000 : 20000;
+        console.log(`⏳ Модель загружается, ждем ${waitTime/1000} секунд...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
 
-          // Повторяем запрос
-          const retryResponse = await axios.post(apiUrl, imageBuffer, {
-            headers: headers,
-            timeout: 60000,
-            responseType: 'json'
-          });
+        // Повторяем запрос
+        console.log(`🔄 Повторная попытка запроса...`);
+        const retryResponse = await axios.post(apiUrl, imageBuffer, {
+          headers: headers,
+          timeout: 60000,
+          responseType: 'json',
+          validateStatus: (status) => status >= 200 && status < 300
+        });
 
-          if (retryResponse.data?.error) {
-            throw new Error(`Модель недоступна: ${retryResponse.data.error}`);
-          }
-
-          result = retryResponse.data;
-        } else {
-          throw new Error(`Ошибка API: ${errorMsg}`);
+        if (retryResponse.data?.error) {
+          throw new Error(`Модель недоступна после ожидания: ${retryResponse.data.error}`);
         }
+
+        if (!retryResponse.data || !Array.isArray(retryResponse.data)) {
+          console.error('❌ Неверный формат ответа после повтора:', retryResponse.data);
+          throw new Error('Неверный формат ответа от API после повтора');
+        }
+
+        result = retryResponse.data;
+      } else if (httpResponse.data?.error) {
+        const errorMsg = httpResponse.data.error;
+        console.error(`❌ Ошибка от API: ${errorMsg}`);
+        throw new Error(`Ошибка API: ${errorMsg}`);
       } else if (!httpResponse.data || !Array.isArray(httpResponse.data)) {
-        throw new Error('Неверный формат ответа от API');
+        console.error('❌ Неверный формат ответа:', httpResponse.data);
+        throw new Error(`Неверный формат ответа от API. Получено: ${typeof httpResponse.data}`);
       } else {
         result = httpResponse.data;
       }
@@ -123,23 +161,43 @@ async function recognizeFood(imageUrl) {
     } catch (httpError) {
       const statusCode = httpError.response?.status;
       const errorData = httpError.response?.data;
+      const errorHeaders = httpError.response?.headers;
 
-      console.log(`⚠️ Способ 1 (HTTP) не удался: ${httpError.message}`);
+      console.error(`❌ Способ 1 (HTTP) не удался: ${httpError.message}`);
+      console.error(`   Код ошибки: ${httpError.code || 'неизвестен'}`);
       if (statusCode) {
-        console.log(`   Статус: ${statusCode}`);
+        console.error(`   HTTP статус: ${statusCode}`);
       }
       if (errorData) {
-        console.log(`   Ответ API:`, JSON.stringify(errorData));
+        console.error(`   Ответ API:`, JSON.stringify(errorData, null, 2));
+      }
+      if (errorHeaders) {
+        console.error(`   Заголовки ответа:`, JSON.stringify(errorHeaders, null, 2));
       }
 
-      // Если 410 или 401, возможно нужен токен
-      if (statusCode === 410 || statusCode === 401) {
+      // Детальная диагностика по статусам
+      if (statusCode === 401) {
         if (!hasToken) {
-          console.error('❌ Ошибка 410/401: Возможно требуется токен Hugging Face!');
-          console.error('💡 Получите токен на https://huggingface.co/settings/tokens и добавьте в .env как HUGGINGFACE_API_TOKEN');
+          console.error('❌ Ошибка 401 (Unauthorized): Требуется токен Hugging Face!');
+          console.error('💡 Получите токен на https://huggingface.co/settings/tokens');
+          console.error('💡 Добавьте в .env: HUGGINGFACE_API_TOKEN=ваш_токен');
+          console.error('💡 Пересоберите контейнер: docker-compose build food-recognition-service && docker-compose up -d');
         } else {
-          console.error('❌ Ошибка 410/401: Проверьте правильность токена или модель может быть недоступна');
+          console.error('❌ Ошибка 401: Токен указан, но неверный или не имеет доступа к модели');
+          console.error('💡 Проверьте правильность токена и его права доступа');
         }
+      } else if (statusCode === 410) {
+        console.error('❌ Ошибка 410 (Gone): Модель может быть удалена или недоступна');
+        console.error('💡 Попробуйте другую модель или проверьте доступность модели на https://huggingface.co');
+      } else if (statusCode === 503) {
+        console.error('❌ Ошибка 503: Модель загружается или сервис перегружен');
+        console.error('💡 Попробуйте повторить запрос через несколько секунд');
+      } else if (statusCode === 429) {
+        console.error('❌ Ошибка 429: Превышен лимит запросов');
+        console.error('💡 Подождите немного и попробуйте снова');
+      } else if (!statusCode && httpError.code === 'ECONNREFUSED') {
+        console.error('❌ Ошибка подключения: Не удалось подключиться к Hugging Face API');
+        console.error('💡 Проверьте интернет-соединение сервера');
       }
 
       console.log(`🔄 Пробуем способ 2: через SDK с base64...`);

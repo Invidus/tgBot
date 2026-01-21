@@ -2554,6 +2554,7 @@ bot.action("subscribe_month", async (ctx) => {
 
   // Проверяем наличие provider_token
   if (!config.telegramPayment.providerToken) {
+    console.error('TELEGRAM_PAYMENT_PROVIDER_TOKEN не установлен');
     await ctx.reply("❌ Платежи не настроены. Обратитесь к администратору.");
     return;
   }
@@ -2561,6 +2562,11 @@ bot.action("subscribe_month", async (ctx) => {
   try {
     // Создаем уникальный ID платежа
     const paymentId = randomUUID();
+
+    // Проверяем длину payload (должен быть до 128 байт)
+    if (Buffer.byteLength(paymentId, 'utf8') > 128) {
+      throw new Error('Payload слишком длинный (максимум 128 байт)');
+    }
 
     // Создаем запись о платеже в БД
     await axios.post(`${databaseServiceUrl}/payments`, {
@@ -2575,24 +2581,56 @@ bot.action("subscribe_month", async (ctx) => {
     }).catch(err => console.error('Ошибка создания записи о платеже:', err));
 
     // Отправляем счет через Telegram Payments API
-    await ctx.replyWithInvoice({
+    const invoiceData = {
       title: `Подписка на ${months} ${months === 1 ? 'месяц' : 'месяца'}`,
       description: `Подписка на неограниченный доступ к рецептам на ${months} ${months === 1 ? 'месяц' : months < 5 ? 'месяца' : 'месяцев'}`,
-      payload: paymentId, // Уникальный ID платежа для идентификации
+      payload: paymentId,
       provider_token: config.telegramPayment.providerToken,
       currency: 'RUB',
       prices: [
         { label: 'Подписка', amount: price * 100 } // Сумма в копейках
-      ],
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
-        ]
-      }
+      ]
+    };
+
+    // Проверяем длину title и description (Telegram ограничения)
+    if (invoiceData.title.length > 32) {
+      invoiceData.title = invoiceData.title.substring(0, 29) + '...';
+    }
+    if (invoiceData.description.length > 255) {
+      invoiceData.description = invoiceData.description.substring(0, 252) + '...';
+    }
+
+    console.log('Отправка invoice для месяца:', {
+      title: invoiceData.title,
+      amount: invoiceData.prices[0].amount,
+      payload: paymentId,
+      providerTokenSet: !!invoiceData.provider_token
     });
+
+    // Добавляем reply_markup в invoiceData
+    invoiceData.reply_markup = {
+      inline_keyboard: [
+        [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+      ]
+    };
+
+    await ctx.replyWithInvoice(invoiceData);
   } catch (error) {
     console.error('Ошибка создания платежа:', error);
-    await ctx.reply("❌ Ошибка при создании платежа. Попробуйте позже.");
+    console.error('Детали ошибки:', {
+      message: error.message,
+      response: error.response?.data,
+      providerToken: config.telegramPayment.providerToken ? 'установлен' : 'отсутствует'
+    });
+
+    let errorMessage = "❌ Ошибка при создании платежа. Попробуйте позже.";
+    if (error.response?.description) {
+      errorMessage += `\n\nДетали: ${error.response.description}`;
+    } else if (error.message) {
+      errorMessage += `\n\nОшибка: ${error.message}`;
+    }
+
+    await ctx.reply(errorMessage);
   }
 });
 
@@ -2608,6 +2646,7 @@ bot.action("subscribe_half_year", async (ctx) => {
 
   // Проверяем наличие provider_token
   if (!config.telegramPayment.providerToken) {
+    console.error('TELEGRAM_PAYMENT_PROVIDER_TOKEN не установлен');
     await ctx.reply("❌ Платежи не настроены. Обратитесь к администратору.");
     return;
   }
@@ -2615,6 +2654,11 @@ bot.action("subscribe_half_year", async (ctx) => {
   try {
     // Создаем уникальный ID платежа
     const paymentId = randomUUID();
+
+    // Проверяем длину payload (должен быть до 128 байт)
+    if (Buffer.byteLength(paymentId, 'utf8') > 128) {
+      throw new Error('Payload слишком длинный (максимум 128 байт)');
+    }
 
     // Создаем запись о платеже в БД
     await axios.post(`${databaseServiceUrl}/payments`, {
@@ -2629,7 +2673,7 @@ bot.action("subscribe_half_year", async (ctx) => {
     }).catch(err => console.error('Ошибка создания записи о платеже:', err));
 
     // Отправляем счет через Telegram Payments API
-    await ctx.replyWithInvoice({
+    const invoiceData = {
       title: `Подписка на ${months} месяцев (скидка 10%)`,
       description: `Подписка на неограниченный доступ к рецептам на ${months} месяцев\n💰 ${pricePerMonth}₽/месяц (скидка 10%)`,
       payload: paymentId,
@@ -2637,16 +2681,48 @@ bot.action("subscribe_half_year", async (ctx) => {
       currency: 'RUB',
       prices: [
         { label: 'Подписка', amount: totalPrice * 100 } // Сумма в копейках
-      ],
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
-        ]
-      }
+      ]
+    };
+
+    // Проверяем длину title и description (Telegram ограничения)
+    if (invoiceData.title.length > 32) {
+      invoiceData.title = invoiceData.title.substring(0, 29) + '...';
+    }
+    if (invoiceData.description.length > 255) {
+      invoiceData.description = invoiceData.description.substring(0, 252) + '...';
+    }
+
+    console.log('Отправка invoice для полгода:', {
+      title: invoiceData.title,
+      amount: invoiceData.prices[0].amount,
+      payload: paymentId,
+      providerTokenSet: !!invoiceData.provider_token
     });
+
+    // Добавляем reply_markup в invoiceData
+    invoiceData.reply_markup = {
+      inline_keyboard: [
+        [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+      ]
+    };
+
+    await ctx.replyWithInvoice(invoiceData);
   } catch (error) {
     console.error('Ошибка создания платежа:', error);
-    await ctx.reply("❌ Ошибка при создании платежа. Попробуйте позже.");
+    console.error('Детали ошибки:', {
+      message: error.message,
+      response: error.response?.data,
+      providerToken: config.telegramPayment.providerToken ? 'установлен' : 'отсутствует'
+    });
+
+    let errorMessage = "❌ Ошибка при создании платежа. Попробуйте позже.";
+    if (error.response?.description) {
+      errorMessage += `\n\nДетали: ${error.response.description}`;
+    } else if (error.message) {
+      errorMessage += `\n\nОшибка: ${error.message}`;
+    }
+
+    await ctx.reply(errorMessage);
   }
 });
 
@@ -2662,6 +2738,7 @@ bot.action("subscribe_year", async (ctx) => {
 
   // Проверяем наличие provider_token
   if (!config.telegramPayment.providerToken) {
+    console.error('TELEGRAM_PAYMENT_PROVIDER_TOKEN не установлен');
     await ctx.reply("❌ Платежи не настроены. Обратитесь к администратору.");
     return;
   }
@@ -2669,6 +2746,11 @@ bot.action("subscribe_year", async (ctx) => {
   try {
     // Создаем уникальный ID платежа
     const paymentId = randomUUID();
+
+    // Проверяем длину payload (должен быть до 128 байт)
+    if (Buffer.byteLength(paymentId, 'utf8') > 128) {
+      throw new Error('Payload слишком длинный (максимум 128 байт)');
+    }
 
     // Создаем запись о платеже в БД
     await axios.post(`${databaseServiceUrl}/payments`, {
@@ -2683,7 +2765,7 @@ bot.action("subscribe_year", async (ctx) => {
     }).catch(err => console.error('Ошибка создания записи о платеже:', err));
 
     // Отправляем счет через Telegram Payments API
-    await ctx.replyWithInvoice({
+    const invoiceData = {
       title: `Подписка на ${months} месяцев (скидка 20%)`,
       description: `Подписка на неограниченный доступ к рецептам на ${months} месяцев\n💰 ${pricePerMonth}₽/месяц (скидка 20%)`,
       payload: paymentId,
@@ -2691,16 +2773,48 @@ bot.action("subscribe_year", async (ctx) => {
       currency: 'RUB',
       prices: [
         { label: 'Подписка', amount: totalPrice * 100 } // Сумма в копейках
-      ],
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
-        ]
-      }
+      ]
+    };
+
+    // Проверяем длину title и description (Telegram ограничения)
+    if (invoiceData.title.length > 32) {
+      invoiceData.title = invoiceData.title.substring(0, 29) + '...';
+    }
+    if (invoiceData.description.length > 255) {
+      invoiceData.description = invoiceData.description.substring(0, 252) + '...';
+    }
+
+    console.log('Отправка invoice для года:', {
+      title: invoiceData.title,
+      amount: invoiceData.prices[0].amount,
+      payload: paymentId,
+      providerTokenSet: !!invoiceData.provider_token
     });
+
+    // Добавляем reply_markup в invoiceData
+    invoiceData.reply_markup = {
+      inline_keyboard: [
+        [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+      ]
+    };
+
+    await ctx.replyWithInvoice(invoiceData);
   } catch (error) {
     console.error('Ошибка создания платежа:', error);
-    await ctx.reply("❌ Ошибка при создании платежа. Попробуйте позже.");
+    console.error('Детали ошибки:', {
+      message: error.message,
+      response: error.response?.data,
+      providerToken: config.telegramPayment.providerToken ? 'установлен' : 'отсутствует'
+    });
+
+    let errorMessage = "❌ Ошибка при создании платежа. Попробуйте позже.";
+    if (error.response?.description) {
+      errorMessage += `\n\nДетали: ${error.response.description}`;
+    } else if (error.message) {
+      errorMessage += `\n\nОшибка: ${error.message}`;
+    }
+
+    await ctx.reply(errorMessage);
   }
 });
 

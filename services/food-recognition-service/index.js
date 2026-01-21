@@ -46,59 +46,75 @@ async function recognizeFood(imageUrl) {
       throw new Error('Изображение пустое или не загружено');
     }
 
+    const imageBuffer = Buffer.from(imageResponse.data);
+    console.log(`📦 Буфер изображения создан, размер: ${imageBuffer.length} байт`);
+
     // Используем Hugging Face для распознавания
     // Пробуем несколько способов передачи данных
     let result;
 
-    // Способ 1: Передаем URL напрямую (самый надежный способ)
+    // Способ 1: Используем base64 (самый надежный способ для Node.js)
     try {
       console.log(`🤖 Отправка запроса в Hugging Face, модель: ${FOOD_MODEL}`);
-      console.log(`📤 Способ 1: Используем URL напрямую: ${imageUrl}`);
+      console.log(`📤 Способ 1: Используем base64...`);
+
+      const base64Image = imageBuffer.toString('base64');
+      const dataUrl = `data:image/jpeg;base64,${base64Image}`;
 
       result = await hf.imageClassification({
         model: FOOD_MODEL,
-        data: imageUrl
+        data: dataUrl
       });
 
-      console.log(`✅ Результат от Hugging Face получен (через URL), количество результатов: ${result?.length || 0}`);
-    } catch (urlError) {
-      console.log(`⚠️ Способ 1 (URL) не удался: ${urlError.message}`);
-      console.log(`🔄 Пробуем способ 2: через Buffer...`);
+      console.log(`✅ Результат от Hugging Face получен (через base64), количество результатов: ${result?.length || 0}`);
+    } catch (base64Error) {
+      console.log(`⚠️ Способ 1 (base64) не удался: ${base64Error.message}`);
+      console.log(`🔄 Пробуем способ 2: прямой HTTP запрос...`);
 
-      // Способ 2: Используем Buffer напрямую
+      // Способ 2: Прямой HTTP запрос к Hugging Face API (отправляем бинарные данные)
       try {
-        const imageBuffer = Buffer.from(imageResponse.data);
-        console.log(`📦 Буфер изображения создан, размер: ${imageBuffer.length} байт`);
+        const apiUrl = `https://api-inference.huggingface.co/models/${FOOD_MODEL}`;
+        const headers = {
+          'Content-Type': 'image/jpeg'
+        };
 
-        result = await hf.imageClassification({
-          model: FOOD_MODEL,
-          data: imageBuffer
+        if (process.env.HUGGINGFACE_API_TOKEN) {
+          headers['Authorization'] = `Bearer ${process.env.HUGGINGFACE_API_TOKEN}`;
+        }
+
+        console.log(`📤 Отправка HTTP запроса к ${apiUrl} (бинарные данные)`);
+
+        const httpResponse = await axios.post(apiUrl, imageBuffer, {
+          headers: headers,
+          timeout: 30000,
+          responseType: 'json'
         });
 
-        console.log(`✅ Результат от Hugging Face получен (через Buffer), количество результатов: ${result?.length || 0}`);
-      } catch (bufferError) {
-        console.log(`⚠️ Способ 2 (Buffer) не удался: ${bufferError.message}`);
-        console.log(`🔄 Пробуем способ 3: через Stream...`);
+        if (!httpResponse.data || !Array.isArray(httpResponse.data)) {
+          throw new Error('Неверный формат ответа от API');
+        }
 
-        // Способ 3: Используем Stream
+        result = httpResponse.data;
+        console.log(`✅ Результат от Hugging Face получен (через HTTP), количество результатов: ${result?.length || 0}`);
+      } catch (httpError) {
+        console.log(`⚠️ Способ 2 (HTTP) не удался: ${httpError.message}`);
+        console.log(`🔄 Пробуем способ 3: через Buffer напрямую...`);
+
+        // Способ 3: Используем Buffer напрямую (последняя попытка)
         try {
-          const { Readable } = await import('stream');
-          const imageBuffer = Buffer.from(imageResponse.data);
-          const stream = Readable.from(imageBuffer);
-
           result = await hf.imageClassification({
             model: FOOD_MODEL,
-            data: stream
+            data: imageBuffer
           });
 
-          console.log(`✅ Результат от Hugging Face получен (через Stream), количество результатов: ${result?.length || 0}`);
-        } catch (streamError) {
+          console.log(`✅ Результат от Hugging Face получен (через Buffer), количество результатов: ${result?.length || 0}`);
+        } catch (bufferError) {
           console.error('❌ Все способы передачи данных не удались:', {
-            urlError: urlError.message,
-            bufferError: bufferError.message,
-            streamError: streamError.message
+            base64Error: base64Error.message,
+            httpError: httpError.message,
+            bufferError: bufferError.message
           });
-          throw new Error(`Ошибка API распознавания: не удалось передать изображение. Последняя ошибка: ${streamError.message}`);
+          throw new Error(`Ошибка API распознавания: не удалось передать изображение. Последняя ошибка: ${bufferError.message}`);
         }
       }
     }

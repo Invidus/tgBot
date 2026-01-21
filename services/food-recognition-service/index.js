@@ -7,13 +7,25 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3004;
 
-// Инициализация Hugging Face (можно использовать без токена для бесплатного использования)
-const hf = process.env.HUGGINGFACE_API_TOKEN
-  ? new HfInference(process.env.HUGGINGFACE_API_TOKEN)
+// Инициализация Hugging Face
+const HUGGINGFACE_TOKEN = process.env.HUGGINGFACE_API_TOKEN;
+const hasToken = !!HUGGINGFACE_TOKEN;
+
+if (!hasToken) {
+  console.warn('⚠️ HUGGINGFACE_API_TOKEN не указан! Некоторые модели могут требовать токен для работы.');
+  console.warn('💡 Получите токен на https://huggingface.co/settings/tokens');
+}
+
+const hf = hasToken
+  ? new HfInference(HUGGINGFACE_TOKEN)
   : new HfInference();
 
 // Модель для распознавания еды (бесплатная)
 const FOOD_MODEL = process.env.FOOD_MODEL || 'nateraw/food-image-classification';
+
+console.log(`🔧 Конфигурация Hugging Face:`);
+console.log(`   - Модель: ${FOOD_MODEL}`);
+console.log(`   - Токен: ${hasToken ? 'указан' : 'не указан'}`);
 
 /**
  * Распознавание блюда по фото через Hugging Face
@@ -53,68 +65,130 @@ async function recognizeFood(imageUrl) {
     // Пробуем несколько способов передачи данных
     let result;
 
-    // Способ 1: Используем base64 (самый надежный способ для Node.js)
+    // Способ 1: Прямой HTTP запрос к Hugging Face API (самый надежный способ)
+    // Используем бинарные данные с правильными заголовками
     try {
       console.log(`🤖 Отправка запроса в Hugging Face, модель: ${FOOD_MODEL}`);
-      console.log(`📤 Способ 1: Используем base64...`);
+      console.log(`📤 Способ 1: Прямой HTTP запрос с бинарными данными...`);
+      console.log(`🔑 Токен: ${hasToken ? 'используется' : 'не указан'}`);
 
-      const base64Image = imageBuffer.toString('base64');
-      const dataUrl = `data:image/jpeg;base64,${base64Image}`;
+      const apiUrl = `https://api-inference.huggingface.co/models/${FOOD_MODEL}`;
+      const headers = {
+        'Content-Type': 'image/jpeg'
+      };
 
-      result = await hf.imageClassification({
-        model: FOOD_MODEL,
-        data: dataUrl
+      if (hasToken) {
+        headers['Authorization'] = `Bearer ${HUGGINGFACE_TOKEN}`;
+      }
+
+      console.log(`📤 Отправка HTTP запроса к ${apiUrl}`);
+
+      const httpResponse = await axios.post(apiUrl, imageBuffer, {
+        headers: headers,
+        timeout: 60000, // Увеличиваем таймаут до 60 секунд
+        responseType: 'json',
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity
       });
 
-      console.log(`✅ Результат от Hugging Face получен (через base64), количество результатов: ${result?.length || 0}`);
-    } catch (base64Error) {
-      console.log(`⚠️ Способ 1 (base64) не удался: ${base64Error.message}`);
-      console.log(`🔄 Пробуем способ 2: прямой HTTP запрос...`);
+      // Проверяем, может быть модель еще загружается
+      if (httpResponse.data?.error) {
+        const errorMsg = httpResponse.data.error;
+        if (errorMsg.includes('loading') || errorMsg.includes('model is currently loading')) {
+          console.log(`⏳ Модель загружается, ждем 10 секунд...`);
+          await new Promise(resolve => setTimeout(resolve, 10000));
 
-      // Способ 2: Прямой HTTP запрос к Hugging Face API (отправляем бинарные данные)
-      try {
-        const apiUrl = `https://api-inference.huggingface.co/models/${FOOD_MODEL}`;
-        const headers = {
-          'Content-Type': 'image/jpeg'
-        };
+          // Повторяем запрос
+          const retryResponse = await axios.post(apiUrl, imageBuffer, {
+            headers: headers,
+            timeout: 60000,
+            responseType: 'json'
+          });
 
-        if (process.env.HUGGINGFACE_API_TOKEN) {
-          headers['Authorization'] = `Bearer ${process.env.HUGGINGFACE_API_TOKEN}`;
+          if (retryResponse.data?.error) {
+            throw new Error(`Модель недоступна: ${retryResponse.data.error}`);
+          }
+
+          result = retryResponse.data;
+        } else {
+          throw new Error(`Ошибка API: ${errorMsg}`);
         }
+      } else if (!httpResponse.data || !Array.isArray(httpResponse.data)) {
+        throw new Error('Неверный формат ответа от API');
+      } else {
+        result = httpResponse.data;
+      }
 
-        console.log(`📤 Отправка HTTP запроса к ${apiUrl} (бинарные данные)`);
+      console.log(`✅ Результат от Hugging Face получен (через HTTP), количество результатов: ${result?.length || 0}`);
+    } catch (httpError) {
+      const statusCode = httpError.response?.status;
+      const errorData = httpError.response?.data;
 
-        const httpResponse = await axios.post(apiUrl, imageBuffer, {
-          headers: headers,
-          timeout: 30000,
-          responseType: 'json'
+      console.log(`⚠️ Способ 1 (HTTP) не удался: ${httpError.message}`);
+      if (statusCode) {
+        console.log(`   Статус: ${statusCode}`);
+      }
+      if (errorData) {
+        console.log(`   Ответ API:`, JSON.stringify(errorData));
+      }
+
+      // Если 410 или 401, возможно нужен токен
+      if (statusCode === 410 || statusCode === 401) {
+        if (!hasToken) {
+          console.error('❌ Ошибка 410/401: Возможно требуется токен Hugging Face!');
+          console.error('💡 Получите токен на https://huggingface.co/settings/tokens и добавьте в .env как HUGGINGFACE_API_TOKEN');
+        } else {
+          console.error('❌ Ошибка 410/401: Проверьте правильность токена или модель может быть недоступна');
+        }
+      }
+
+      console.log(`🔄 Пробуем способ 2: через SDK с base64...`);
+
+      // Способ 2: Используем SDK с base64
+      try {
+        const base64Image = imageBuffer.toString('base64');
+        const dataUrl = `data:image/jpeg;base64,${base64Image}`;
+
+        console.log(`📤 Способ 2: Используем SDK с base64...`);
+
+        result = await hf.imageClassification({
+          model: FOOD_MODEL,
+          data: dataUrl
         });
 
-        if (!httpResponse.data || !Array.isArray(httpResponse.data)) {
-          throw new Error('Неверный формат ответа от API');
-        }
+        console.log(`✅ Результат от Hugging Face получен (через SDK base64), количество результатов: ${result?.length || 0}`);
+      } catch (sdkError) {
+        console.log(`⚠️ Способ 2 (SDK base64) не удался: ${sdkError.message}`);
+        console.log(`🔄 Пробуем способ 3: через SDK с Buffer...`);
 
-        result = httpResponse.data;
-        console.log(`✅ Результат от Hugging Face получен (через HTTP), количество результатов: ${result?.length || 0}`);
-      } catch (httpError) {
-        console.log(`⚠️ Способ 2 (HTTP) не удался: ${httpError.message}`);
-        console.log(`🔄 Пробуем способ 3: через Buffer напрямую...`);
-
-        // Способ 3: Используем Buffer напрямую (последняя попытка)
+        // Способ 3: Используем SDK с Buffer напрямую (последняя попытка)
         try {
           result = await hf.imageClassification({
             model: FOOD_MODEL,
             data: imageBuffer
           });
 
-          console.log(`✅ Результат от Hugging Face получен (через Buffer), количество результатов: ${result?.length || 0}`);
+          console.log(`✅ Результат от Hugging Face получен (через SDK Buffer), количество результатов: ${result?.length || 0}`);
         } catch (bufferError) {
           console.error('❌ Все способы передачи данных не удались:', {
-            base64Error: base64Error.message,
             httpError: httpError.message,
+            httpStatus: statusCode,
+            httpData: errorData,
+            sdkError: sdkError.message,
             bufferError: bufferError.message
           });
-          throw new Error(`Ошибка API распознавания: не удалось передать изображение. Последняя ошибка: ${bufferError.message}`);
+
+          let errorMessage = 'Ошибка API распознавания: не удалось передать изображение.';
+
+          if (statusCode === 410) {
+            errorMessage += ' Модель может быть недоступна или требуется токен.';
+          } else if (statusCode === 401 && !hasToken) {
+            errorMessage += ' Требуется токен Hugging Face. Получите на https://huggingface.co/settings/tokens';
+          } else {
+            errorMessage += ` Последняя ошибка: ${bufferError.message}`;
+          }
+
+          throw new Error(errorMessage);
         }
       }
     }

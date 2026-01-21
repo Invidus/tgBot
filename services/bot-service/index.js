@@ -2607,13 +2607,7 @@ bot.action("subscribe_month", async (ctx) => {
       providerTokenSet: !!invoiceData.provider_token
     });
 
-    // Добавляем reply_markup в invoiceData
-    invoiceData.reply_markup = {
-      inline_keyboard: [
-        [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
-      ]
-    };
-
+    // Для sendInvoice не передаем reply_markup - Telegram автоматически добавляет кнопку оплаты
     await ctx.replyWithInvoice(invoiceData);
   } catch (error) {
     console.error('Ошибка создания платежа:', error);
@@ -2699,13 +2693,7 @@ bot.action("subscribe_half_year", async (ctx) => {
       providerTokenSet: !!invoiceData.provider_token
     });
 
-    // Добавляем reply_markup в invoiceData
-    invoiceData.reply_markup = {
-      inline_keyboard: [
-        [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
-      ]
-    };
-
+    // Для sendInvoice не передаем reply_markup - Telegram автоматически добавляет кнопку оплаты
     await ctx.replyWithInvoice(invoiceData);
   } catch (error) {
     console.error('Ошибка создания платежа:', error);
@@ -2791,13 +2779,7 @@ bot.action("subscribe_year", async (ctx) => {
       providerTokenSet: !!invoiceData.provider_token
     });
 
-    // Добавляем reply_markup в invoiceData
-    invoiceData.reply_markup = {
-      inline_keyboard: [
-        [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
-      ]
-    };
-
+    // Для sendInvoice не передаем reply_markup - Telegram автоматически добавляет кнопку оплаты
     await ctx.replyWithInvoice(invoiceData);
   } catch (error) {
     console.error('Ошибка создания платежа:', error);

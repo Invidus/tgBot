@@ -48,7 +48,8 @@ export const config = {
   },
   services: {
     recipeParser: process.env.RECIPE_PARSER_URL || "http://localhost:3001",
-    database: process.env.DATABASE_SERVICE_URL || "http://localhost:3002"
+    database: process.env.DATABASE_SERVICE_URL || "http://localhost:3002",
+    foodRecognition: process.env.FOOD_RECOGNITION_URL || "http://localhost:3004"
   },
   telegramPayment: {
     providerToken: process.env.TELEGRAM_PAYMENT_PROVIDER_TOKEN

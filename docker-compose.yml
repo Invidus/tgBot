@@ -84,6 +84,7 @@ services:
       REDIS_PORT: 6379
       DATABASE_SERVICE_URL: http://database-service:3002
       RECIPE_PARSER_URL: http://recipe-parser-service:3001
+      FOOD_RECOGNITION_URL: http://food-recognition-service:3004
       FOOD_URL: ${FOOD_URL:-https://1000.menu/catalog/na-zavtrak}
       DINNER_URL: ${DINNER_URL:-https://1000.menu/catalog/pp-obed}
       LUNCH_URL: ${LUNCH_URL:-https://1000.menu/catalog/zvanji-uzhin}
@@ -95,6 +96,21 @@ services:
         condition: service_started
       recipe-parser-service:
         condition: service_started
+      food-recognition-service:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - tgbot_network
+
+  food-recognition-service:
+    build:
+      context: .
+      dockerfile: services/food-recognition-service/Dockerfile
+    container_name: tgbot_food_recognition
+    environment:
+      PORT: 3004
+      HUGGINGFACE_API_TOKEN: ${HUGGINGFACE_API_TOKEN:-}
+      FOOD_MODEL: ${FOOD_MODEL:-nateraw/food-image-classification}
     restart: unless-stopped
     networks:
       - tgbot_network

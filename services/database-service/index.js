@@ -148,12 +148,51 @@ const initTables = async () => {
         chat_id BIGINT NOT NULL UNIQUE,
         username VARCHAR(255),
         free_requests INTEGER DEFAULT 0,
+        ai_requests INTEGER DEFAULT 0,
         subscription_end_date TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
     console.log('✅ Таблица users создана или уже существует');
+
+    // Добавляем колонку ai_requests если её нет
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name='users' AND column_name='ai_requests'
+        ) THEN
+          ALTER TABLE users ADD COLUMN ai_requests INTEGER DEFAULT 0;
+        END IF;
+      END $$;
+    `).catch(() => {}); // Игнорируем ошибку если колонка уже есть
+
+    // Создаем таблицу для истории ИИ запросов (для дневных лимитов)
+    console.log('🔄 Создание таблицы ai_requests_history...');
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ai_requests_history (
+        id SERIAL PRIMARY KEY,
+        chat_id BIGINT NOT NULL,
+        request_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        request_count INTEGER DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(chat_id, request_date)
+      )
+    `);
+    console.log('✅ Таблица ai_requests_history создана или уже существует');
+
+    // Создаем индексы для ai_requests_history
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_ai_requests_history_chat_id
+      ON ai_requests_history(chat_id)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_ai_requests_history_date
+      ON ai_requests_history(request_date)
+    `);
+    console.log('✅ Индексы для ai_requests_history созданы');
 
     // Создаем индексы для users
     await pool.query(`
@@ -855,11 +894,23 @@ app.get('/users/username/:username/info', async (req, res) => {
       ? Math.ceil((new Date(user.subscription_end_date) - now) / (1000 * 60 * 60 * 24))
       : 0;
 
+    // Получаем информацию о ИИ запросах
+    const today = new Date().toISOString().split('T')[0];
+    const aiRequestsResult = await pool.query(
+      'SELECT request_count FROM ai_requests_history WHERE chat_id = $1 AND request_date = $2',
+      [user.chat_id, today]
+    );
+    const todayAiRequests = aiRequestsResult.rows[0]?.request_count || 0;
+    const aiRequestsRemaining = Math.max(0, 5 - todayAiRequests); // Лимит 5 запросов в день
+
     res.json({
       userInfo: {
         chatId: user.chat_id,
         username: user.username,
         freeRequests: user.free_requests || 0,
+        aiRequests: user.ai_requests || 0,
+        aiRequestsRemaining,
+        aiRequestsToday: todayAiRequests,
         hasSubscription,
         subscriptionEndDate: user.subscription_end_date,
         daysLeft,
@@ -868,6 +919,206 @@ app.get('/users/username/:username/info', async (req, res) => {
     });
   } catch (error) {
     console.error('Ошибка получения информации о пользователе:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Проверка доступных ИИ запросов (с учетом дневного лимита)
+app.get('/users/:chatId/ai-requests/check', async (req, res) => {
+  try {
+    const chatId = parseInt(req.params.chatId);
+    const today = new Date().toISOString().split('T')[0];
+
+    // Проверяем подписку
+    const userResult = await pool.query(
+      'SELECT subscription_end_date FROM users WHERE chat_id = $1',
+      [chatId]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    const user = userResult.rows[0];
+    const hasSubscription = user.subscription_end_date && new Date(user.subscription_end_date) > new Date();
+
+    if (!hasSubscription) {
+      return res.json({
+        allowed: false,
+        reason: 'no_subscription',
+        message: 'ИИ распознавание доступно только для подписчиков'
+      });
+    }
+
+    // Проверяем дневной лимит
+    const historyResult = await pool.query(
+      'SELECT request_count FROM ai_requests_history WHERE chat_id = $1 AND request_date = $2',
+      [chatId, today]
+    );
+
+    const todayRequests = historyResult.rows[0]?.request_count || 0;
+    const maxDailyRequests = 5;
+
+    if (todayRequests >= maxDailyRequests) {
+      return res.json({
+        allowed: false,
+        reason: 'daily_limit',
+        message: `Дневной лимит ИИ запросов исчерпан (${maxDailyRequests}/день)`,
+        remaining: 0,
+        usedToday: todayRequests
+      });
+    }
+
+    res.json({
+      allowed: true,
+      remaining: maxDailyRequests - todayRequests,
+      usedToday: todayRequests,
+      maxDaily: maxDailyRequests
+    });
+  } catch (error) {
+    console.error('Ошибка проверки ИИ запросов:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Уменьшение ИИ запросов (после использования)
+app.post('/users/:chatId/ai-requests/decrement', async (req, res) => {
+  try {
+    const chatId = parseInt(req.params.chatId);
+    const today = new Date().toISOString().split('T')[0];
+
+    // Увеличиваем счетчик в истории
+    await pool.query(`
+      INSERT INTO ai_requests_history (chat_id, request_date, request_count)
+      VALUES ($1, $2, 1)
+      ON CONFLICT (chat_id, request_date)
+      DO UPDATE SET request_count = ai_requests_history.request_count + 1
+    `, [chatId, today]);
+
+    // Уменьшаем общий счетчик ИИ запросов (если есть)
+    await pool.query(`
+      UPDATE users
+      SET ai_requests = GREATEST(0, ai_requests - 1), updated_at = CURRENT_TIMESTAMP
+      WHERE chat_id = $1
+    `, [chatId]);
+
+    // Получаем обновленную информацию
+    const historyResult = await pool.query(
+      'SELECT request_count FROM ai_requests_history WHERE chat_id = $1 AND request_date = $2',
+      [chatId, today]
+    );
+    const todayRequests = historyResult.rows[0]?.request_count || 0;
+
+    res.json({
+      success: true,
+      remaining: Math.max(0, 5 - todayRequests),
+      usedToday: todayRequests
+    });
+  } catch (error) {
+    console.error('Ошибка уменьшения ИИ запросов:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Увеличение ИИ запросов (для админа)
+app.put('/users/:chatId/ai-requests', async (req, res) => {
+  try {
+    const chatId = parseInt(req.params.chatId);
+    const { amount } = req.body;
+
+    if (!amount || isNaN(amount) || amount < 0) {
+      return res.status(400).json({ error: 'Неверное количество запросов' });
+    }
+
+    const result = await pool.query(`
+      UPDATE users
+      SET ai_requests = ai_requests + $1, updated_at = CURRENT_TIMESTAMP
+      WHERE chat_id = $2
+      RETURNING ai_requests
+    `, [amount, chatId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    res.json({
+      success: true,
+      aiRequests: result.rows[0].ai_requests
+    });
+  } catch (error) {
+    console.error('Ошибка увеличения ИИ запросов:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Увеличение ИИ запросов по username (для админа)
+app.put('/users/username/:username/ai-requests', async (req, res) => {
+  try {
+    const username = req.params.username.replace('@', '');
+    const { amount } = req.body;
+
+    if (!amount || isNaN(amount) || amount < 0) {
+      return res.status(400).json({ error: 'Неверное количество запросов' });
+    }
+
+    const result = await pool.query(`
+      UPDATE users
+      SET ai_requests = ai_requests + $1, updated_at = CURRENT_TIMESTAMP
+      WHERE LOWER(username) = LOWER($2)
+      RETURNING ai_requests, chat_id
+    `, [amount, username]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    res.json({
+      success: true,
+      aiRequests: result.rows[0].ai_requests,
+      chatId: result.rows[0].chat_id
+    });
+  } catch (error) {
+    console.error('Ошибка увеличения ИИ запросов по username:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Получение информации об ИИ запросах пользователя
+app.get('/users/:chatId/ai-requests/info', async (req, res) => {
+  try {
+    const chatId = parseInt(req.params.chatId);
+    const today = new Date().toISOString().split('T')[0];
+
+    const userResult = await pool.query(
+      'SELECT ai_requests, subscription_end_date FROM users WHERE chat_id = $1',
+      [chatId]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    const user = userResult.rows[0];
+    const hasSubscription = user.subscription_end_date && new Date(user.subscription_end_date) > new Date();
+
+    const historyResult = await pool.query(
+      'SELECT request_count FROM ai_requests_history WHERE chat_id = $1 AND request_date = $2',
+      [chatId, today]
+    );
+
+    const todayRequests = historyResult.rows[0]?.request_count || 0;
+    const maxDailyRequests = 5;
+    const remaining = Math.max(0, maxDailyRequests - todayRequests);
+
+    res.json({
+      hasSubscription,
+      aiRequestsTotal: user.ai_requests || 0,
+      aiRequestsToday: todayRequests,
+      aiRequestsRemaining: remaining,
+      maxDailyRequests
+    });
+  } catch (error) {
+    console.error('Ошибка получения информации об ИИ запросах:', error);
     res.status(500).json({ error: 'Ошибка БД' });
   }
 });

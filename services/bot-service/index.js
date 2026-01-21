@@ -11,9 +11,11 @@ import {
   getAdminMainKeyboard,
   handleGetUserInfo,
   handleSetFreeRequests,
+  handleSetAiRequests,
   handleSetSubscription,
   processGetUserInfo,
   processSetFreeRequests,
+  processSetAiRequests,
   processSetSubscription
 } from "./adminPanel.js";
 
@@ -30,6 +32,7 @@ const redis = new Redis({
 
 const recipeParserUrl = config.services.recipeParser;
 const databaseServiceUrl = config.services.database;
+const foodRecognitionServiceUrl = config.services.foodRecognition;
 
 // Вспомогательные функции для работы с Redis
 const getUserState = async (chatId) => {
@@ -418,6 +421,46 @@ const checkRequestLimit = async (chatId) => {
   return { allowed: true, remaining: freeRequests, hasSubscription: false };
 };
 
+// Проверка лимита ИИ запросов (только для подписчиков, 5 в день)
+const checkAiRequestLimit = async (chatId) => {
+  try {
+    const response = await axios.get(`${databaseServiceUrl}/users/${chatId}/ai-requests/check`, {
+      timeout: 10000
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Ошибка проверки ИИ лимита:', error.message);
+    return { allowed: false, reason: 'error', message: 'Ошибка проверки лимита' };
+  }
+};
+
+// Уменьшение ИИ запросов
+const decrementAiRequests = async (chatId) => {
+  try {
+    const response = await axios.post(`${databaseServiceUrl}/users/${chatId}/ai-requests/decrement`, {}, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Ошибка уменьшения ИИ запросов:', error.message);
+    throw error;
+  }
+};
+
+// Получение информации об ИИ запросах
+const getAiRequestsInfo = async (chatId) => {
+  try {
+    const response = await axios.get(`${databaseServiceUrl}/users/${chatId}/ai-requests/info`, {
+      timeout: 10000
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Ошибка получения информации об ИИ запросах:', error.message);
+    return null;
+  }
+};
+
 // Создание подписки
 const createSubscription = async (chatId, subscriptionType, months) => {
   try {
@@ -559,6 +602,18 @@ bot.action("admin_set_free_requests", async (ctx) => {
     return;
   }
   const state = await handleSetFreeRequests(ctx);
+  if (state) {
+    setAdminState(ctx.chat.id, state);
+  }
+});
+
+bot.action("admin_set_ai_requests", async (ctx) => {
+  const username = ctx.from?.username;
+  if (!isAdmin(username)) {
+    await ctx.answerCbQuery("❌ У вас нет доступа");
+    return;
+  }
+  const state = await handleSetAiRequests(ctx);
   if (state) {
     setAdminState(ctx.chat.id, state);
   }
@@ -2239,6 +2294,12 @@ bot.action("back_to_main", async (ctx) => {
 
   const freeRequests = user?.free_requests || 0;
 
+  // Получаем информацию об ИИ запросах для подписчиков
+  let aiInfo = null;
+  if (hasActiveSub) {
+    aiInfo = await getAiRequestsInfo(chatId);
+  }
+
   const mainMenuKeyboard = {
     reply_markup: {
       inline_keyboard: [
@@ -2256,6 +2317,9 @@ bot.action("back_to_main", async (ctx) => {
   let messageText = "Выберите что хотите приготовить или выполните поиск по продукту";
   if (!hasActiveSub) {
     messageText += `\n\n📊 Бесплатных запросов: ${freeRequests}`;
+  } else if (aiInfo) {
+    messageText += `\n\n🤖 ИИ запросов сегодня: ${aiInfo.aiRequestsRemaining}/5`;
+    messageText += `\n📸 Отправьте фото блюда для распознавания и подсчета калорий!`;
   }
 
   try {
@@ -2370,6 +2434,12 @@ bot.action("start_bot", async (ctx) => {
 
   const freeRequests = user?.free_requests || 0;
 
+  // Получаем информацию об ИИ запросах для подписчиков
+  let aiInfo = null;
+  if (hasActiveSub) {
+    aiInfo = await getAiRequestsInfo(chatId);
+  }
+
   await ctx.reply('Добро пожаловать, я помогу вам придумать что приготовить на завтрак, обед и ужин✌️', {
     reply_markup: {
       remove_keyboard: true
@@ -2379,6 +2449,9 @@ bot.action("start_bot", async (ctx) => {
   let menuText = "Выберите что хотите приготовить или выполните поиск по продукту";
   if (!hasActiveSub) {
     menuText += `\n\n📊 Бесплатных запросов: ${freeRequests}`;
+  } else if (aiInfo) {
+    menuText += `\n\n🤖 ИИ запросов сегодня: ${aiInfo.aiRequestsRemaining}/5`;
+    menuText += `\n📸 Отправьте фото блюда для распознавания и подсчета калорий!`;
   }
 
   await ctx.reply(menuText, {
@@ -2395,6 +2468,140 @@ bot.action("start_bot", async (ctx) => {
     }
   });
   await ctx.answerCbQuery();
+});
+
+// Обработчик фото для распознавания блюд
+bot.on("photo", async (ctx) => {
+  const chatId = ctx.chat.id;
+  const photo = ctx.message.photo[ctx.message.photo.length - 1]; // Берем самое большое фото
+
+  // Проверяем лимит ИИ запросов
+  const aiLimitCheck = await checkAiRequestLimit(chatId);
+
+  if (!aiLimitCheck.allowed) {
+    if (aiLimitCheck.reason === 'no_subscription') {
+      await ctx.reply(
+        "📸 **Распознавание блюд по фото**\n\n" +
+        "❌ Эта функция доступна только для подписчиков!\n\n" +
+        "💡 Оформите подписку, чтобы получить доступ к:\n" +
+        "• Распознаванию блюд по фото\n" +
+        "• Подсчету калорий\n" +
+        "• 5 ИИ запросов в день",
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "💳 Оформить подписку", callback_data: "subscription_menu" }],
+              [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+
+    if (aiLimitCheck.reason === 'daily_limit') {
+      await ctx.reply(
+        `📸 **Лимит ИИ запросов исчерпан**\n\n` +
+        `❌ Вы использовали все ${aiLimitCheck.usedToday} запросов сегодня.\n\n` +
+        `🕐 Лимит обновится завтра.\n` +
+        `📊 Максимум: 5 запросов в день`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+
+    await ctx.reply("❌ Ошибка проверки лимита. Попробуйте позже.");
+    return;
+  }
+
+  // Отправляем сообщение о загрузке
+  const loadingMsg = await ctx.reply("🔍 Анализирую фото блюда...");
+
+  try {
+    // Получаем файл фото
+    const file = await ctx.telegram.getFile(photo.file_id);
+    const fileUrl = `https://api.telegram.org/file/bot${config.telegramToken}/${file.file_path}`;
+
+    // Отправляем в сервис распознавания
+    const response = await axios.post(`${foodRecognitionServiceUrl}/recognize`, {
+      imageUrl: fileUrl,
+      chatId: chatId
+    }, {
+      timeout: 60000 // 60 секунд для ИИ обработки
+    });
+
+    const result = response.data;
+
+    if (!result.success) {
+      throw new Error(result.error || 'Ошибка распознавания');
+    }
+
+    // Уменьшаем счетчик ИИ запросов
+    await decrementAiRequests(chatId);
+
+    // Получаем обновленную информацию о лимитах
+    const aiInfo = await getAiRequestsInfo(chatId);
+
+    // Удаляем сообщение о загрузке
+    await ctx.telegram.deleteMessage(chatId, loadingMsg.message_id);
+
+    // Формируем сообщение с результатом
+    let message = `🍽️ **${result.dishName}**\n\n`;
+    message += `📊 **Пищевая ценность (на 100г):**\n`;
+    message += `🔥 Калории: ${result.calories} ккал\n`;
+    message += `🥗 Белки: ${result.protein}г\n`;
+    message += `🍞 Углеводы: ${result.carbs}г\n`;
+    message += `🧈 Жиры: ${result.fats}г\n\n`;
+    message += `📈 Точность: ${result.confidence}%\n`;
+    message += `📚 Источник: ${result.source}\n\n`;
+
+    if (aiInfo) {
+      message += `📊 ИИ запросов осталось сегодня: ${aiInfo.aiRequestsRemaining}/5`;
+    }
+
+    // Добавляем альтернативные варианты, если есть
+    if (result.alternatives && result.alternatives.length > 0) {
+      message += `\n\n🔀 **Возможные варианты:**\n`;
+      result.alternatives.forEach((alt, index) => {
+        message += `${index + 1}. ${alt.name} (${Math.round(alt.confidence * 100)}%)\n`;
+      });
+    }
+
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+        ]
+      }
+    });
+
+  } catch (error) {
+    console.error('Ошибка распознавания блюда:', error);
+    await ctx.telegram.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
+    await ctx.reply(
+      "❌ Не удалось распознать блюдо. Попробуйте другое фото.\n\n" +
+      "💡 Убедитесь, что:\n" +
+      "• Фото четкое и хорошо освещено\n" +
+      "• Блюдо хорошо видно на фото\n" +
+      "• Фото не размыто",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+          ]
+        }
+      }
+    );
+  }
 });
 
 // Обработчик текстовых сообщений (поиск и админ-панель)
@@ -2420,6 +2627,11 @@ bot.on("message", async (ctx) => {
 
       case 'admin_awaiting_free_requests':
         await processSetFreeRequests(ctx, text, databaseServiceUrl);
+        setAdminState(chatId, null);
+        return;
+
+      case 'admin_awaiting_ai_requests':
+        await processSetAiRequests(ctx, text, databaseServiceUrl);
         setAdminState(chatId, null);
         return;
 
@@ -2528,6 +2740,16 @@ bot.action("subscription_menu", async (ctx) => {
     message += `✅ У вас активная подписка!\n`;
     message += `📅 Подписка действует до: ${subscriptionEndDate.toLocaleDateString('ru-RU')}\n`;
     message += `⏰ Осталось дней: ${daysLeft}\n\n`;
+
+    // Получаем информацию об ИИ запросах
+    const aiInfo = await getAiRequestsInfo(chatId);
+    if (aiInfo) {
+      message += `🤖 **ИИ распознавание блюд:**\n`;
+      message += `📊 Запросов сегодня: ${aiInfo.aiRequestsToday}/5\n`;
+      message += `✅ Осталось: ${aiInfo.aiRequestsRemaining}/5\n\n`;
+      message += `📸 Отправьте фото блюда для распознавания и подсчета калорий!\n\n`;
+    }
+
     message += `💡 С подпиской у вас неограниченный доступ к рецептам!\n\n`;
     message += `Вы можете продлить подписку:`;
   } else {
@@ -2535,6 +2757,8 @@ bot.action("subscription_menu", async (ctx) => {
     message += `📊 Бесплатных запросов осталось: ${freeRequests}\n\n`;
     message += `💡 С подпиской вы получите:\n`;
     message += `✨ Неограниченный доступ к рецептам\n`;
+    message += `🤖 Распознавание блюд по фото (5 запросов/день)\n`;
+    message += `📊 Подсчет калорий и БЖУ\n`;
     message += `🚀 Без ограничений по количеству запросов\n\n`;
     message += `Выберите период подписки:`;
   }
@@ -2583,7 +2807,7 @@ bot.action("subscribe_month", async (ctx) => {
     // Отправляем счет через Telegram Payments API
     const invoiceData = {
       title: `Подписка на ${months} ${months === 1 ? 'месяц' : 'месяца'}`,
-      description: `Подписка на неограниченный доступ к рецептам на ${months} ${months === 1 ? 'месяц' : months < 5 ? 'месяца' : 'месяцев'}`,
+      description: `Подписка включает:\n• Неограниченный доступ к рецептам\n• Распознавание блюд по фото (5/день)\n• Подсчет калорий и БЖУ`,
       payload: paymentId,
       provider_token: config.telegramPayment.providerToken,
       currency: 'RUB',
@@ -2669,7 +2893,7 @@ bot.action("subscribe_half_year", async (ctx) => {
     // Отправляем счет через Telegram Payments API
     const invoiceData = {
       title: `Подписка на ${months} месяцев (скидка 10%)`,
-      description: `Подписка на неограниченный доступ к рецептам на ${months} месяцев\n💰 ${pricePerMonth}₽/месяц (скидка 10%)`,
+      description: `Подписка включает: неограниченный доступ к рецептам, распознавание блюд по фото (5/день), подсчет калорий. ${pricePerMonth}₽/мес (скидка 10%)`,
       payload: paymentId,
       provider_token: config.telegramPayment.providerToken,
       currency: 'RUB',
@@ -2755,7 +2979,7 @@ bot.action("subscribe_year", async (ctx) => {
     // Отправляем счет через Telegram Payments API
     const invoiceData = {
       title: `Подписка на ${months} месяцев (скидка 20%)`,
-      description: `Подписка на неограниченный доступ к рецептам на ${months} месяцев\n💰 ${pricePerMonth}₽/месяц (скидка 20%)`,
+      description: `Подписка включает: неограниченный доступ к рецептам, распознавание блюд по фото (5/день), подсчет калорий. ${pricePerMonth}₽/мес (скидка 20%)`,
       payload: paymentId,
       provider_token: config.telegramPayment.providerToken,
       currency: 'RUB',

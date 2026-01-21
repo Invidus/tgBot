@@ -33,6 +33,7 @@ export const getAdminMainKeyboard = () => {
       inline_keyboard: [
         [{ text: '📊 Информация о пользователе', callback_data: 'admin_get_user_info' }],
         [{ text: '🎁 Выдать бесплатные запросы', callback_data: 'admin_set_free_requests' }],
+        [{ text: '🤖 Выдать ИИ запросы', callback_data: 'admin_set_ai_requests' }],
         [{ text: '💳 Выдать подписку', callback_data: 'admin_set_subscription' }],
         [{ text: '❌ Закрыть админ-панель', callback_data: 'admin_close' }]
       ]
@@ -66,7 +67,16 @@ export const formatUserInfo = (userInfo) => {
   let message = `📊 **Информация о пользователе**\n\n`;
   message += `👤 Username: @${userInfo.username || 'не указан'}\n`;
   message += `🆔 Chat ID: ${userInfo.chatId}\n`;
-  message += `🎁 Бесплатных запросов: ${userInfo.freeRequests}\n\n`;
+  message += `🎁 Бесплатных запросов: ${userInfo.freeRequests}\n`;
+
+  // Информация об ИИ запросах
+  if (userInfo.aiRequests !== undefined) {
+    message += `🤖 ИИ запросов (всего): ${userInfo.aiRequests || 0}\n`;
+  }
+  if (userInfo.aiRequestsRemaining !== undefined) {
+    message += `📊 ИИ запросов сегодня: ${userInfo.aiRequestsToday || 0}/5 (осталось: ${userInfo.aiRequestsRemaining || 0})\n`;
+  }
+  message += `\n`;
 
   if (userInfo.hasSubscription) {
     message += `✅ **Подписка активна**\n`;
@@ -121,6 +131,27 @@ export const handleSetFreeRequests = async (ctx) => {
   );
 
   return 'admin_awaiting_free_requests';
+};
+
+/**
+ * Обработчик команды выдачи ИИ запросов
+ */
+export const handleSetAiRequests = async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    '📝 Введите username пользователя и количество ИИ запросов через пробел:\n' +
+    'Например: @username 10\n\n' +
+    '💡 ИИ запросы добавляются к общему счетчику пользователя',
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '❌ Отмена', callback_data: 'admin_cancel' }]
+        ]
+      }
+    }
+  );
+
+  return 'admin_awaiting_ai_requests';
 };
 
 /**
@@ -215,6 +246,52 @@ export const processSetFreeRequests = async (ctx, text, databaseServiceUrl) => {
     } else {
       console.error('Ошибка при установке бесплатных запросов:', error);
       await ctx.reply('❌ Произошла ошибка при установке бесплатных запросов.');
+    }
+  }
+};
+
+/**
+ * Обрабатывает ввод для выдачи ИИ запросов
+ */
+export const processSetAiRequests = async (ctx, text, databaseServiceUrl) => {
+  const parts = text.trim().split(/\s+/);
+
+  if (parts.length < 2) {
+    await ctx.reply('❌ Неверный формат. Используйте: @username количество\nНапример: @username 10');
+    return;
+  }
+
+  const username = parts[0].replace('@', '');
+  const amount = parseInt(parts[1], 10);
+
+  if (isNaN(amount) || amount < 0) {
+    await ctx.reply('❌ Количество ИИ запросов должно быть положительным числом.');
+    return;
+  }
+
+  try {
+    const response = await axios.put(
+      `${databaseServiceUrl}/users/username/${username}/ai-requests`,
+      { amount },
+      { timeout: 10000 }
+    );
+
+    if (!response.data.success) {
+      await ctx.reply(`❌ Пользователь @${username} не найден в базе данных.`);
+      return;
+    }
+
+    await ctx.reply(
+      `✅ Успешно добавлено ${amount} ИИ запросов для пользователя @${username}\n` +
+      `📊 Всего ИИ запросов: ${response.data.aiRequests}`,
+      { reply_markup: getAdminMainKeyboard().reply_markup }
+    );
+  } catch (error) {
+    if (error.response?.status === 404) {
+      await ctx.reply(`❌ Пользователь @${username} не найден в базе данных.`);
+    } else {
+      console.error('Ошибка при выдаче ИИ запросов:', error);
+      await ctx.reply('❌ Произошла ошибка при выдаче ИИ запросов.');
     }
   }
 };

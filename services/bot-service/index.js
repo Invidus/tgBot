@@ -2650,23 +2650,63 @@ bot.on("photo", async (ctx) => {
   const loadingMsg = await ctx.reply("🔍 Анализирую фото блюда...");
 
   try {
+    console.log(`📸 Начало обработки фото для пользователя ${chatId}, file_id: ${photo.file_id}`);
+
     // Получаем файл фото
-    const file = await ctx.telegram.getFile(photo.file_id);
+    let file;
+    try {
+      file = await ctx.telegram.getFile(photo.file_id);
+      console.log(`✅ Файл получен: ${file.file_path}, размер: ${file.file_size || 'неизвестен'}`);
+    } catch (fileError) {
+      console.error('❌ Ошибка получения файла из Telegram:', fileError);
+      throw new Error(`Не удалось получить файл фото: ${fileError.message}`);
+    }
+
     const fileUrl = `https://api.telegram.org/file/bot${config.telegramToken}/${file.file_path}`;
+    console.log(`🔗 URL файла: ${fileUrl}`);
 
     // Отправляем в сервис распознавания
-    const response = await axios.post(`${foodRecognitionServiceUrl}/recognize`, {
-      imageUrl: fileUrl,
-      chatId: chatId
-    }, {
-      timeout: 60000 // 60 секунд для ИИ обработки
-    });
+    console.log(`🚀 Отправка запроса в food-recognition-service: ${foodRecognitionServiceUrl}/recognize`);
+
+    let response;
+    try {
+      response = await axios.post(`${foodRecognitionServiceUrl}/recognize`, {
+        imageUrl: fileUrl,
+        chatId: chatId
+      }, {
+        timeout: 60000, // 60 секунд для ИИ обработки
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      console.log(`✅ Ответ от food-recognition-service получен:`, response.status, response.data?.success);
+    } catch (axiosError) {
+      console.error('❌ Ошибка запроса к food-recognition-service:', {
+        message: axiosError.message,
+        code: axiosError.code,
+        response: axiosError.response?.data,
+        status: axiosError.response?.status
+      });
+
+      if (axiosError.code === 'ECONNREFUSED' || axiosError.code === 'ETIMEDOUT') {
+        throw new Error('Сервис распознавания недоступен. Попробуйте позже.');
+      }
+
+      if (axiosError.response?.data?.error) {
+        throw new Error(axiosError.response.data.error);
+      }
+
+      throw new Error(`Ошибка связи с сервисом распознавания: ${axiosError.message}`);
+    }
 
     const result = response.data;
 
-    if (!result.success) {
-      throw new Error(result.error || 'Ошибка распознавания');
+    if (!result || !result.success) {
+      console.error('❌ Сервис вернул ошибку:', result);
+      throw new Error(result?.error || 'Ошибка распознавания');
     }
+
+    console.log(`✅ Распознавание успешно: ${result.dishName}, калории: ${result.calories}`);
 
     // Уменьшаем счетчик ИИ запросов
     await decrementAiRequests(chatId);
@@ -2713,25 +2753,43 @@ bot.on("photo", async (ctx) => {
     });
 
   } catch (error) {
-    console.error('Ошибка распознавания блюда:', error);
+    console.error('❌ Ошибка распознавания блюда:', {
+      message: error.message,
+      stack: error.stack,
+      chatId: chatId
+    });
+
     await ctx.telegram.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
 
+    // Формируем сообщение об ошибке
+    let errorMessage = "❌ Не удалось распознать блюдо.\n\n";
+
+    // Добавляем более конкретное сообщение в зависимости от типа ошибки
+    if (error.message.includes('недоступен') || error.message.includes('ECONNREFUSED')) {
+      errorMessage += "⚠️ Сервис распознавания временно недоступен. Попробуйте позже.\n\n";
+    } else if (error.message.includes('timeout') || error.message.includes('ETIMEDOUT')) {
+      errorMessage += "⏱️ Превышено время ожидания. Попробуйте еще раз.\n\n";
+    } else {
+      errorMessage += "💡 Попробуйте другое фото или повторите попытку позже.\n\n";
+    }
+
+    errorMessage += "💡 Убедитесь, что:\n";
+    errorMessage += "• Фото четкое и хорошо освещено\n";
+    errorMessage += "• Блюдо хорошо видно на фото\n";
+    errorMessage += "• Фото не размыто";
+
     // Остаемся в состоянии ожидания фото, чтобы можно было попробовать еще раз
-    await ctx.reply(
-      "❌ Не удалось распознать блюдо. Попробуйте другое фото.\n\n" +
-      "💡 Убедитесь, что:\n" +
-      "• Фото четкое и хорошо освещено\n" +
-      "• Блюдо хорошо видно на фото\n" +
-      "• Фото не размыто",
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "📸 Попробовать еще раз", callback_data: "recognize_food" }],
-            [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
-          ]
-        }
+    await ctx.reply(errorMessage, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📸 Попробовать еще раз", callback_data: "recognize_food" }],
+          [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+        ]
       }
-    );
+    });
+
+    // Возвращаем состояние, чтобы можно было попробовать еще раз
+    await setUserState(chatId, 5);
   }
 });
 
@@ -3409,6 +3467,10 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 bot.launch()
   .then(() => {
     console.log('✅ Bot Service запущен');
+    console.log('📋 Конфигурация сервисов:');
+    console.log(`   - Recipe Parser: ${recipeParserUrl}`);
+    console.log(`   - Database Service: ${databaseServiceUrl}`);
+    console.log(`   - Food Recognition Service: ${foodRecognitionServiceUrl}`);
   })
   .catch((err) => {
     console.error('❌ Ошибка при запуске Bot Service:', err);

@@ -20,28 +20,68 @@ const FOOD_MODEL = process.env.FOOD_MODEL || 'nateraw/food-image-classification'
  */
 async function recognizeFood(imageUrl) {
   try {
-    console.log(`🔍 Распознавание блюда: ${imageUrl}`);
+    console.log(`🔍 Начало распознавания блюда: ${imageUrl}`);
 
     // Загружаем изображение
-    const imageResponse = await axios.get(imageUrl, {
-      responseType: 'arraybuffer',
-      timeout: 30000
-    });
+    let imageResponse;
+    try {
+      console.log(`📥 Загрузка изображения из URL...`);
+      imageResponse = await axios.get(imageUrl, {
+        responseType: 'arraybuffer',
+        timeout: 30000,
+        maxContentLength: 10 * 1024 * 1024, // 10MB максимум
+        validateStatus: (status) => status === 200
+      });
+      console.log(`✅ Изображение загружено, размер: ${imageResponse.data.length} байт`);
+    } catch (downloadError) {
+      console.error('❌ Ошибка загрузки изображения:', {
+        message: downloadError.message,
+        code: downloadError.code,
+        status: downloadError.response?.status
+      });
+      throw new Error(`Не удалось загрузить изображение: ${downloadError.message}`);
+    }
+
+    if (!imageResponse.data || imageResponse.data.length === 0) {
+      throw new Error('Изображение пустое или не загружено');
+    }
 
     const imageBuffer = Buffer.from(imageResponse.data);
+    console.log(`📦 Буфер изображения создан, размер: ${imageBuffer.length} байт`);
 
     // Используем Hugging Face для распознавания
-    const result = await hf.imageClassification({
-      model: FOOD_MODEL,
-      data: imageBuffer
-    });
+    let result;
+    try {
+      console.log(`🤖 Отправка запроса в Hugging Face, модель: ${FOOD_MODEL}`);
+      result = await hf.imageClassification({
+        model: FOOD_MODEL,
+        data: imageBuffer
+      });
+      console.log(`✅ Результат от Hugging Face получен, количество результатов: ${result?.length || 0}`);
+    } catch (hfError) {
+      console.error('❌ Ошибка Hugging Face API:', {
+        message: hfError.message,
+        status: hfError.response?.status,
+        data: hfError.response?.data
+      });
+      throw new Error(`Ошибка API распознавания: ${hfError.message}`);
+    }
 
-    console.log('📊 Результат распознавания:', result);
+    if (!result || !Array.isArray(result) || result.length === 0) {
+      console.error('❌ Пустой результат от Hugging Face:', result);
+      throw new Error('API не вернул результатов распознавания');
+    }
+
+    console.log('📊 Результат распознавания:', JSON.stringify(result.slice(0, 3), null, 2));
 
     // Берем топ-3 наиболее вероятных блюда
     const topResults = result
       .sort((a, b) => b.score - a.score)
       .slice(0, 3);
+
+    if (!topResults[0] || !topResults[0].label) {
+      throw new Error('Не удалось определить блюдо из результатов');
+    }
 
     return {
       dishName: topResults[0].label,
@@ -52,8 +92,12 @@ async function recognizeFood(imageUrl) {
       }))
     };
   } catch (error) {
-    console.error('❌ Ошибка распознавания блюда:', error);
-    throw new Error(`Ошибка распознавания: ${error.message}`);
+    console.error('❌ Ошибка распознавания блюда:', {
+      message: error.message,
+      stack: error.stack,
+      imageUrl: imageUrl
+    });
+    throw error; // Пробрасываем ошибку дальше с оригинальным сообщением
   }
 }
 
@@ -143,17 +187,40 @@ app.post('/recognize', async (req, res) => {
   try {
     const { imageUrl, chatId } = req.body;
 
+    console.log(`📸 Получен запрос на распознавание от пользователя ${chatId}`);
+    console.log(`📋 Параметры запроса:`, { imageUrl: imageUrl ? 'указан' : 'отсутствует', chatId });
+
     if (!imageUrl) {
-      return res.status(400).json({ error: 'imageUrl обязателен' });
+      console.error('❌ Отсутствует imageUrl в запросе');
+      return res.status(400).json({
+        success: false,
+        error: 'imageUrl обязателен'
+      });
     }
 
-    console.log(`📸 Получен запрос на распознавание от пользователя ${chatId}`);
-
     // Распознаем блюдо
-    const recognitionResult = await recognizeFood(imageUrl);
+    let recognitionResult;
+    try {
+      recognitionResult = await recognizeFood(imageUrl);
+      console.log(`✅ Блюдо распознано: ${recognitionResult.dishName} (уверенность: ${Math.round(recognitionResult.confidence * 100)}%)`);
+    } catch (recognitionError) {
+      console.error('❌ Ошибка на этапе распознавания:', recognitionError);
+      return res.status(500).json({
+        success: false,
+        error: recognitionError.message || 'Ошибка распознавания блюда'
+      });
+    }
 
     // Получаем калории
-    const nutritionInfo = await getCalories(recognitionResult.dishName);
+    let nutritionInfo;
+    try {
+      nutritionInfo = await getCalories(recognitionResult.dishName);
+      console.log(`✅ Калории получены: ${nutritionInfo.calories} ккал (источник: ${nutritionInfo.source})`);
+    } catch (caloriesError) {
+      console.error('❌ Ошибка получения калорий, используем примерные значения:', caloriesError);
+      // Используем примерные значения в случае ошибки
+      nutritionInfo = getEstimatedCalories(recognitionResult.dishName);
+    }
 
     const result = {
       success: true,
@@ -164,17 +231,20 @@ app.post('/recognize', async (req, res) => {
       carbs: nutritionInfo.carbs,
       fats: nutritionInfo.fats,
       source: nutritionInfo.source,
-      alternatives: recognitionResult.alternatives
+      alternatives: recognitionResult.alternatives || []
     };
 
-    console.log(`✅ Распознавание завершено: ${result.dishName} (${result.calories} ккал)`);
+    console.log(`✅ Распознавание завершено успешно: ${result.dishName} (${result.calories} ккал)`);
 
     res.json(result);
   } catch (error) {
-    console.error('❌ Ошибка обработки запроса:', error);
+    console.error('❌ Критическая ошибка обработки запроса:', {
+      message: error.message,
+      stack: error.stack
+    });
     res.status(500).json({
       success: false,
-      error: error.message || 'Ошибка распознавания блюда'
+      error: error.message || 'Неожиданная ошибка при распознавании блюда'
     });
   }
 });

@@ -2,7 +2,7 @@ import axios from 'axios';
 import { config } from '../shared/config.js';
 import { randomUUID } from 'node:crypto';
 
-const { shopId, secretKey, isTestMode } = config.yookassa;
+const { shopId, secretKey, isTestMode, returnUrl } = config.yookassa;
 
 if (!shopId || !secretKey) {
   console.warn('⚠️ YooKassa credentials not configured. Payment features will be disabled.');
@@ -44,7 +44,7 @@ export async function createPayment({ amount, description, paymentId, metadata }
         },
         confirmation: {
           type: 'redirect',
-          return_url: `https://t.me/your_bot` // URL для возврата после оплаты
+          return_url: returnUrl
         },
         capture: true,
         description: description,

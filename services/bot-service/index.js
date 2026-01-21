@@ -4,7 +4,7 @@ import { getDetailedMenuKeyboard, getSearchKeyboard, getStepNavigationKeyboard, 
 import { validateAndTruncateMessage } from "./messageUtils.js";
 import Redis from "ioredis";
 import axios from "axios";
-import { createPayment, getPayment, parseWebhookEvent } from "./yookassa.js";
+// Импорты ЮKassa удалены - используем только Telegram Payments API
 import { randomUUID } from "node:crypto";
 import {
   isAdmin,
@@ -2201,80 +2201,12 @@ bot.action(/^favorite_step_by_step_(\d+)$/, async (ctx) => {
   }
 });
 
-// Функция для проверки и активации ожидающих платежей (fallback если webhook не работает)
-const checkPendingPayments = async (chatId) => {
-  try {
-    // Получаем все ожидающие платежи пользователя
-    const response = await axios.get(`${databaseServiceUrl}/payments`, {
-      params: { chatId: chatId.toString(), status: 'pending' },
-      timeout: 10000
-    }).catch(() => ({ data: { payments: [] } }));
-
-    const pendingPayments = response.data.payments || [];
-
-    for (const payment of pendingPayments) {
-      if (payment.yookassa_payment_id) {
-        try {
-          // Проверяем статус платежа в ЮKassa
-          const yookassaPayment = await getPayment(payment.yookassa_payment_id);
-
-          if (yookassaPayment.status === 'succeeded' && payment.status !== 'succeeded') {
-            // Обновляем статус в БД
-            await axios.put(`${databaseServiceUrl}/payments/${payment.payment_id}`, {
-              status: 'succeeded',
-              yookassaPaymentId: payment.yookassa_payment_id
-            }, {
-              timeout: 10000,
-              headers: { 'Content-Type': 'application/json' }
-            }).catch(() => {});
-
-            // Активируем подписку
-            await createSubscription(chatId, payment.subscription_type, payment.months);
-
-            return {
-              success: true,
-              message: `✅ Подписка активирована!\n\n` +
-                       `📅 Срок действия: ${payment.months} ${payment.months === 1 ? 'месяц' : payment.months < 5 ? 'месяца' : 'месяцев'}\n` +
-                       `💰 Сумма: ${payment.amount}₽\n\n` +
-                       `🎉 Теперь у вас неограниченный доступ к рецептам!`
-            };
-          } else if (yookassaPayment.status === 'canceled') {
-            // Обновляем статус отмененного платежа
-            await axios.put(`${databaseServiceUrl}/payments/${payment.payment_id}`, {
-              status: 'canceled',
-              yookassaPaymentId: payment.yookassa_payment_id
-            }, {
-              timeout: 10000,
-              headers: { 'Content-Type': 'application/json' }
-            }).catch(() => {});
-          }
-        } catch (error) {
-          console.error('Ошибка проверки платежа:', error.message);
-        }
-      }
-    }
-
-    return null;
-  } catch (error) {
-    console.error('Ошибка проверки ожидающих платежей:', error.message);
-    return null;
-  }
-};
-
 // Обработчик возврата на главную
 bot.action("back_to_main", async (ctx) => {
   // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
 
   const chatId = ctx.chat.id;
   const currentMessage = ctx.callbackQuery?.message;
-
-  // Проверяем ожидающие платежи (fallback если webhook не работает)
-  const paymentCheck = await checkPendingPayments(chatId);
-  if (paymentCheck && paymentCheck.success) {
-    await ctx.reply(paymentCheck.message, {
-      reply_markup: { inline_keyboard: [[{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]] }
-    }).catch(() => {});
-  }
 
   // Проверяем, есть ли активный пошаговый рецепт
   const recipeData = await getStepByStepData(chatId);
@@ -2620,6 +2552,12 @@ bot.action("subscribe_month", async (ctx) => {
   const months = 1;
   const subscriptionType = 'month';
 
+  // Проверяем наличие provider_token
+  if (!config.telegramPayment.providerToken) {
+    await ctx.reply("❌ Платежи не настроены. Обратитесь к администратору.");
+    return;
+  }
+
   try {
     // Создаем уникальный ID платежа
     const paymentId = randomUUID();
@@ -2636,42 +2574,22 @@ bot.action("subscribe_month", async (ctx) => {
       headers: { 'Content-Type': 'application/json' }
     }).catch(err => console.error('Ошибка создания записи о платеже:', err));
 
-    // Создаем платеж в ЮKassa
-    const payment = await createPayment({
-      amount: price,
-      description: `Подписка на ${months} ${months === 1 ? 'месяц' : 'месяца'}`,
-      paymentId,
-      metadata: {
-        chatId: chatId.toString(),
-        subscriptionType,
-        months: months.toString()
+    // Отправляем счет через Telegram Payments API
+    await ctx.replyWithInvoice({
+      title: `Подписка на ${months} ${months === 1 ? 'месяц' : 'месяца'}`,
+      description: `Подписка на неограниченный доступ к рецептам на ${months} ${months === 1 ? 'месяц' : months < 5 ? 'месяца' : 'месяцев'}`,
+      payload: paymentId, // Уникальный ID платежа для идентификации
+      provider_token: config.telegramPayment.providerToken,
+      currency: 'RUB',
+      prices: [
+        { label: 'Подписка', amount: price * 100 } // Сумма в копейках
+      ],
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+        ]
       }
     });
-
-    // Обновляем запись о платеже с ID из ЮKassa
-    await axios.put(`${databaseServiceUrl}/payments/${paymentId}`, {
-      status: 'pending',
-      yookassaPaymentId: payment.id
-    }, {
-      timeout: 10000,
-      headers: { 'Content-Type': 'application/json' }
-    }).catch(err => console.error('Ошибка обновления платежа:', err));
-
-    await ctx.reply(
-      `💳 **Оплата подписки**\n\n` +
-      `📅 Период: ${months} ${months === 1 ? 'месяц' : 'месяца'}\n` +
-      `💰 Сумма: ${price}₽\n\n` +
-      `Нажмите на кнопку ниже, чтобы перейти к оплате:`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "💳 Оплатить", url: payment.confirmationUrl }],
-            [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
-          ]
-        }
-      }
-    );
   } catch (error) {
     console.error('Ошибка создания платежа:', error);
     await ctx.reply("❌ Ошибка при создании платежа. Попробуйте позже.");
@@ -2688,6 +2606,12 @@ bot.action("subscribe_half_year", async (ctx) => {
   const totalPrice = pricePerMonth * months;
   const subscriptionType = 'half_year';
 
+  // Проверяем наличие provider_token
+  if (!config.telegramPayment.providerToken) {
+    await ctx.reply("❌ Платежи не настроены. Обратитесь к администратору.");
+    return;
+  }
+
   try {
     // Создаем уникальный ID платежа
     const paymentId = randomUUID();
@@ -2704,42 +2628,22 @@ bot.action("subscribe_half_year", async (ctx) => {
       headers: { 'Content-Type': 'application/json' }
     }).catch(err => console.error('Ошибка создания записи о платеже:', err));
 
-    // Создаем платеж в ЮKassa
-    const payment = await createPayment({
-      amount: totalPrice,
-      description: `Подписка на ${months} месяцев (скидка 10%)`,
-      paymentId,
-      metadata: {
-        chatId: chatId.toString(),
-        subscriptionType,
-        months: months.toString()
+    // Отправляем счет через Telegram Payments API
+    await ctx.replyWithInvoice({
+      title: `Подписка на ${months} месяцев (скидка 10%)`,
+      description: `Подписка на неограниченный доступ к рецептам на ${months} месяцев\n💰 ${pricePerMonth}₽/месяц (скидка 10%)`,
+      payload: paymentId,
+      provider_token: config.telegramPayment.providerToken,
+      currency: 'RUB',
+      prices: [
+        { label: 'Подписка', amount: totalPrice * 100 } // Сумма в копейках
+      ],
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+        ]
       }
     });
-
-    // Обновляем запись о платеже с ID из ЮKassa
-    await axios.put(`${databaseServiceUrl}/payments/${paymentId}`, {
-      status: 'pending',
-      yookassaPaymentId: payment.id
-    }, {
-      timeout: 10000,
-      headers: { 'Content-Type': 'application/json' }
-    }).catch(err => console.error('Ошибка обновления платежа:', err));
-
-    await ctx.reply(
-      `💳 **Оплата подписки**\n\n` +
-      `📅 Период: ${months} месяцев\n` +
-      `💰 Сумма: ${totalPrice}₽ (${pricePerMonth}₽/месяц, скидка 10%)\n\n` +
-      `Нажмите на кнопку ниже, чтобы перейти к оплате:`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "💳 Оплатить", url: payment.confirmationUrl }],
-            [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
-          ]
-        }
-      }
-    );
   } catch (error) {
     console.error('Ошибка создания платежа:', error);
     await ctx.reply("❌ Ошибка при создании платежа. Попробуйте позже.");
@@ -2756,6 +2660,12 @@ bot.action("subscribe_year", async (ctx) => {
   const totalPrice = pricePerMonth * months;
   const subscriptionType = 'year';
 
+  // Проверяем наличие provider_token
+  if (!config.telegramPayment.providerToken) {
+    await ctx.reply("❌ Платежи не настроены. Обратитесь к администратору.");
+    return;
+  }
+
   try {
     // Создаем уникальный ID платежа
     const paymentId = randomUUID();
@@ -2772,45 +2682,127 @@ bot.action("subscribe_year", async (ctx) => {
       headers: { 'Content-Type': 'application/json' }
     }).catch(err => console.error('Ошибка создания записи о платеже:', err));
 
-    // Создаем платеж в ЮKassa
-    const payment = await createPayment({
-      amount: totalPrice,
-      description: `Подписка на ${months} месяцев (скидка 20%)`,
-      paymentId,
-      metadata: {
-        chatId: chatId.toString(),
-        subscriptionType,
-        months: months.toString()
+    // Отправляем счет через Telegram Payments API
+    await ctx.replyWithInvoice({
+      title: `Подписка на ${months} месяцев (скидка 20%)`,
+      description: `Подписка на неограниченный доступ к рецептам на ${months} месяцев\n💰 ${pricePerMonth}₽/месяц (скидка 20%)`,
+      payload: paymentId,
+      provider_token: config.telegramPayment.providerToken,
+      currency: 'RUB',
+      prices: [
+        { label: 'Подписка', amount: totalPrice * 100 } // Сумма в копейках
+      ],
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+        ]
       }
     });
+  } catch (error) {
+    console.error('Ошибка создания платежа:', error);
+    await ctx.reply("❌ Ошибка при создании платежа. Попробуйте позже.");
+  }
+});
 
-    // Обновляем запись о платеже с ID из ЮKassa
+// Обработчик pre_checkout_query - проверка перед оплатой
+bot.on('pre_checkout_query', async (ctx) => {
+  const query = ctx.preCheckoutQuery;
+  const paymentId = query.invoice_payload;
+
+  try {
+    // Проверяем, существует ли платеж в БД
+    const response = await axios.get(`${databaseServiceUrl}/payments/${paymentId}`, {
+      timeout: 10000
+    }).catch(() => null);
+
+    if (!response || !response.data.payment) {
+      console.error(`Платеж ${paymentId} не найден в БД`);
+      await ctx.answerPreCheckoutQuery(false, {
+        error_message: 'Платеж не найден. Попробуйте создать новый.'
+      });
+      return;
+    }
+
+    const payment = response.data.payment;
+    const expectedAmount = payment.amount * 100; // В копейках
+
+    // Проверяем сумму платежа
+    if (query.total_amount !== expectedAmount) {
+      console.error(`Несоответствие суммы: ожидалось ${expectedAmount}, получено ${query.total_amount}`);
+      await ctx.answerPreCheckoutQuery(false, {
+        error_message: 'Неверная сумма платежа. Попробуйте создать новый платеж.'
+      });
+      return;
+    }
+
+    // Все проверки пройдены, подтверждаем платеж
+    await ctx.answerPreCheckoutQuery(true);
+    console.log(`✅ Pre-checkout подтвержден для платежа ${paymentId}`);
+  } catch (error) {
+    console.error('Ошибка обработки pre_checkout_query:', error);
+    await ctx.answerPreCheckoutQuery(false, {
+      error_message: 'Ошибка обработки платежа. Попробуйте позже.'
+    });
+  }
+});
+
+// Обработчик successful_payment - успешная оплата
+bot.on('successful_payment', async (ctx) => {
+  const payment = ctx.message.successful_payment;
+  const paymentId = payment.invoice_payload;
+  const yookassaPaymentId = payment.provider_payment_charge_id; // ID транзакции в ЮKassa
+  const chatId = ctx.chat.id;
+
+  try {
+    // Получаем информацию о платеже из БД
+    const response = await axios.get(`${databaseServiceUrl}/payments/${paymentId}`, {
+      timeout: 10000
+    }).catch(() => null);
+
+    if (!response || !response.data.payment) {
+      console.error(`Платеж ${paymentId} не найден в БД после успешной оплаты`);
+      await ctx.reply("❌ Ошибка: платеж не найден в системе. Обратитесь в поддержку.");
+      return;
+    }
+
+    const dbPayment = response.data.payment;
+
+    // Обновляем статус платежа в БД
     await axios.put(`${databaseServiceUrl}/payments/${paymentId}`, {
-      status: 'pending',
-      yookassaPaymentId: payment.id
+      status: 'succeeded',
+      yookassaPaymentId: yookassaPaymentId
     }, {
       timeout: 10000,
       headers: { 'Content-Type': 'application/json' }
     }).catch(err => console.error('Ошибка обновления платежа:', err));
 
-    await ctx.reply(
-      `💳 **Оплата подписки**\n\n` +
-      `📅 Период: ${months} месяцев\n` +
-      `💰 Сумма: ${totalPrice}₽ (${pricePerMonth}₽/месяц, скидка 20%)\n\n` +
-      `Нажмите на кнопку ниже, чтобы перейти к оплате:`,
-      {
+    // Активируем подписку
+    try {
+      await createSubscription(chatId, dbPayment.subscription_type, dbPayment.months);
+
+      const message = `✅ **Подписка активирована!**\n\n` +
+                     `📅 Срок действия: ${dbPayment.months} ${dbPayment.months === 1 ? 'месяц' : dbPayment.months < 5 ? 'месяца' : 'месяцев'}\n` +
+                     `💰 Сумма: ${dbPayment.amount}₽\n` +
+                     `🆔 ID транзакции: ${yookassaPaymentId}\n\n` +
+                     `🎉 Теперь у вас неограниченный доступ к рецептам!`;
+
+      await ctx.reply(message, {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: "💳 Оплатить", url: payment.confirmationUrl }],
             [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
           ]
         }
-      }
-    );
+      });
+
+      console.log(`✅ Подписка успешно активирована для пользователя ${chatId}, платеж ${paymentId}`);
+    } catch (error) {
+      console.error('Ошибка активации подписки:', error);
+      await ctx.reply("❌ Ошибка активации подписки. Обратитесь в поддержку с ID транзакции: " + yookassaPaymentId);
+    }
   } catch (error) {
-    console.error('Ошибка создания платежа:', error);
-    await ctx.reply("❌ Ошибка при создании платежа. Попробуйте позже.");
+    console.error('Ошибка обработки successful_payment:', error);
+    await ctx.reply("❌ Ошибка обработки платежа. Обратитесь в поддержку.");
   }
 });
 

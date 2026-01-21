@@ -87,9 +87,7 @@ services:
       FOOD_URL: ${FOOD_URL:-https://1000.menu/catalog/na-zavtrak}
       DINNER_URL: ${DINNER_URL:-https://1000.menu/catalog/pp-obed}
       LUNCH_URL: ${LUNCH_URL:-https://1000.menu/catalog/zvanji-uzhin}
-      YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID}
-      YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY}
-      YOOKASSA_TEST_MODE: ${YOOKASSA_TEST_MODE:-true}
+      TELEGRAM_PAYMENT_PROVIDER_TOKEN: ${TELEGRAM_PAYMENT_PROVIDER_TOKEN}
     depends_on:
       redis:
         condition: service_healthy
@@ -97,27 +95,6 @@ services:
         condition: service_started
       recipe-parser-service:
         condition: service_started
-    restart: unless-stopped
-    networks:
-      - tgbot_network
-
-  payment-webhook-service:
-    build:
-      context: .
-      dockerfile: services/payment-webhook-service/Dockerfile
-    container_name: tgbot_payment_webhook
-    environment:
-      PORT: 3003
-      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
-      DATABASE_SERVICE_URL: http://database-service:3002
-      YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID}
-      YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY}
-      YOOKASSA_TEST_MODE: ${YOOKASSA_TEST_MODE:-true}
-    depends_on:
-      database-service:
-        condition: service_started
-    ports:
-      - "3003:3003"  # Открываем порт для webhook от ЮKassa
     restart: unless-stopped
     networks:
       - tgbot_network

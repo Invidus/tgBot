@@ -539,6 +539,7 @@ bot.start(async (ctx) => {
       [{ text: "Обед🍜", callback_data: "dinner" }],
       [{ text: "Ужин🍝", callback_data: "lunch" }],
       [{ text: "Поиск🔎", callback_data: "search" }],
+      [{ text: "Распознать блюдо📸", callback_data: "recognize_food" }],
       [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
       [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
       [{ text: "Закрыть❌", callback_data: "close_menu" }]
@@ -888,6 +889,94 @@ bot.action("search", async (ctx) => {
 
   await ctx.reply("Введите поисковый запрос:", getSearchKeyboard());
   await ctx.answerCbQuery();
+});
+
+// Обработчик распознавания блюда по фото
+bot.action("recognize_food", async (ctx) => {
+  const chatId = ctx.chat.id;
+  await ctx.answerCbQuery();
+
+  // Проверяем лимит ИИ запросов
+  const aiLimitCheck = await checkAiRequestLimit(chatId);
+
+  if (!aiLimitCheck.allowed) {
+    if (aiLimitCheck.reason === 'no_subscription') {
+      await ctx.reply(
+        "📸 **Распознавание блюд по фото**\n\n" +
+        "❌ Эта функция доступна только для подписчиков!\n\n" +
+        "💡 Оформите подписку, чтобы получить доступ к:\n" +
+        "• Распознаванию блюд по фото\n" +
+        "• Подсчету калорий\n" +
+        "• 5 ИИ запросов в день",
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "💳 Оформить подписку", callback_data: "subscription_menu" }],
+              [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+
+    if (aiLimitCheck.reason === 'daily_limit') {
+      await ctx.reply(
+        `📸 **Лимит ИИ запросов исчерпан**\n\n` +
+        `❌ Вы использовали все ${aiLimitCheck.usedToday} запросов сегодня.\n\n` +
+        `🕐 Лимит обновится завтра.\n` +
+        `📊 Максимум: 5 запросов в день`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+
+    await ctx.reply("❌ Ошибка проверки лимита. Попробуйте позже.", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+        ]
+      }
+    });
+    return;
+  }
+
+  // Получаем информацию об ИИ запросах
+  const aiInfo = await getAiRequestsInfo(chatId);
+  let message = "📸 **Распознавание блюда по фото**\n\n";
+  message += "Отправьте фото блюда, и я определю:\n";
+  message += "• Название блюда\n";
+  message += "• Калории и БЖУ\n";
+  message += "• Пищевую ценность\n\n";
+
+  if (aiInfo) {
+    message += `📊 ИИ запросов осталось сегодня: ${aiInfo.aiRequestsRemaining}/5\n\n`;
+  }
+
+  message += "💡 **Советы для лучшего результата:**\n";
+  message += "• Фото должно быть четким\n";
+  message += "• Блюдо должно быть хорошо видно\n";
+  message += "• Хорошее освещение улучшит точность";
+
+  // Переводим в состояние ожидания фото (state 5)
+  await setUserState(chatId, 5);
+
+  await ctx.reply(message, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+      ]
+    }
+  });
 });
 
 // Обработчик для неактивной кнопки ингредиентов (если рецепт уже был показан)
@@ -2307,6 +2396,7 @@ bot.action("back_to_main", async (ctx) => {
         [{ text: "Обед🍜", callback_data: "dinner" }],
         [{ text: "Ужин🍝", callback_data: "lunch" }],
         [{ text: "Поиск🔎", callback_data: "search" }],
+        [{ text: "Распознать блюдо📸", callback_data: "recognize_food" }],
         [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
         [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
         [{ text: "Закрыть❌", callback_data: "close_menu" }]
@@ -2319,7 +2409,6 @@ bot.action("back_to_main", async (ctx) => {
     messageText += `\n\n📊 Бесплатных запросов: ${freeRequests}`;
   } else if (aiInfo) {
     messageText += `\n\n🤖 ИИ запросов сегодня: ${aiInfo.aiRequestsRemaining}/5`;
-    messageText += `\n📸 Отправьте фото блюда для распознавания и подсчета калорий!`;
   }
 
   try {
@@ -2451,7 +2540,6 @@ bot.action("start_bot", async (ctx) => {
     menuText += `\n\n📊 Бесплатных запросов: ${freeRequests}`;
   } else if (aiInfo) {
     menuText += `\n\n🤖 ИИ запросов сегодня: ${aiInfo.aiRequestsRemaining}/5`;
-    menuText += `\n📸 Отправьте фото блюда для распознавания и подсчета калорий!`;
   }
 
   await ctx.reply(menuText, {
@@ -2470,9 +2558,16 @@ bot.action("start_bot", async (ctx) => {
   await ctx.answerCbQuery();
 });
 
-// Обработчик фото для распознавания блюд
+// Обработчик фото для распознавания блюд (только в состоянии ожидания фото)
 bot.on("photo", async (ctx) => {
   const chatId = ctx.chat.id;
+  const state = await getUserState(chatId);
+
+  // Обрабатываем фото только если пользователь в состоянии ожидания фото (state 5)
+  if (state !== 5) {
+    return; // Игнорируем фото, если не в режиме распознавания
+  }
+
   const photo = ctx.message.photo[ctx.message.photo.length - 1]; // Берем самое большое фото
 
   // Проверяем лимит ИИ запросов
@@ -2575,10 +2670,14 @@ bot.on("photo", async (ctx) => {
       });
     }
 
+    // Возвращаем в главное меню после успешного распознавания
+    await setUserState(chatId, 0);
+
     await ctx.reply(message, {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
+          [{ text: "📸 Распознать еще", callback_data: "recognize_food" }],
           [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
         ]
       }
@@ -2587,6 +2686,8 @@ bot.on("photo", async (ctx) => {
   } catch (error) {
     console.error('Ошибка распознавания блюда:', error);
     await ctx.telegram.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
+
+    // Остаемся в состоянии ожидания фото, чтобы можно было попробовать еще раз
     await ctx.reply(
       "❌ Не удалось распознать блюдо. Попробуйте другое фото.\n\n" +
       "💡 Убедитесь, что:\n" +
@@ -2596,6 +2697,7 @@ bot.on("photo", async (ctx) => {
       {
         reply_markup: {
           inline_keyboard: [
+            [{ text: "📸 Попробовать еще раз", callback_data: "recognize_food" }],
             [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
           ]
         }
@@ -2643,6 +2745,25 @@ bot.on("message", async (ctx) => {
   }
 
   const state = await getUserState(chatId);
+
+  // Игнорируем текстовые сообщения в состоянии ожидания фото (state 5)
+  if (state === 5) {
+    // Если пользователь отправил текст вместо фото, напоминаем отправить фото
+    if (ctx.message.text && !ctx.message.text.startsWith('/')) {
+      await ctx.reply(
+        "📸 Пожалуйста, отправьте фото блюда для распознавания.\n\n" +
+        "💡 Отправьте изображение, а не текст.",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+            ]
+          }
+        }
+      );
+    }
+    return;
+  }
 
   if (state === 4 && ctx.message.text && !ctx.message.text.startsWith('/')) {
     const searchQuery = ctx.message.text.trim();

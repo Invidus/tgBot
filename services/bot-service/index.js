@@ -539,8 +539,8 @@ bot.start(async (ctx) => {
       [{ text: "Обед🍜", callback_data: "dinner" }],
       [{ text: "Ужин🍝", callback_data: "lunch" }],
       [{ text: "Поиск🔎", callback_data: "search" }],
-      [{ text: "Распознать блюдо📸", callback_data: "recognize_food" }],
       [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
+      [{ text: "Распознать блюдо📸", callback_data: "recognize_food" }],
       [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
       [{ text: "Закрыть❌", callback_data: "close_menu" }]
     ]
@@ -896,7 +896,40 @@ bot.action("recognize_food", async (ctx) => {
   const chatId = ctx.chat.id;
   await ctx.answerCbQuery();
 
-  // Проверяем лимит ИИ запросов
+  // Проверяем подписку напрямую (как в других местах)
+  const user = await getUserByChatId(chatId);
+  let hasActiveSub = false;
+
+  if (user && user.subscription_end_date) {
+    hasActiveSub = new Date(user.subscription_end_date) > new Date();
+  }
+  if (!hasActiveSub) {
+    hasActiveSub = await hasActiveSubscription(chatId);
+  }
+
+  // Если нет подписки, показываем сообщение
+  if (!hasActiveSub) {
+    await ctx.reply(
+      "📸 **Распознавание блюд по фото**\n\n" +
+      "❌ Эта функция доступна только для подписчиков!\n\n" +
+      "💡 Оформите подписку, чтобы получить доступ к:\n" +
+      "• Распознаванию блюд по фото\n" +
+      "• Подсчету калорий\n" +
+      "• 5 ИИ запросов в день",
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "💳 Оформить подписку", callback_data: "subscription_menu" }],
+            [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+          ]
+        }
+      }
+    );
+    return;
+  }
+
+  // Проверяем лимит ИИ запросов (только если есть подписка)
   const aiLimitCheck = await checkAiRequestLimit(chatId);
 
   if (!aiLimitCheck.allowed) {
@@ -2396,8 +2429,8 @@ bot.action("back_to_main", async (ctx) => {
         [{ text: "Обед🍜", callback_data: "dinner" }],
         [{ text: "Ужин🍝", callback_data: "lunch" }],
         [{ text: "Поиск🔎", callback_data: "search" }],
-        [{ text: "Распознать блюдо📸", callback_data: "recognize_food" }],
         [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
+        [{ text: "Распознать блюдо📸", callback_data: "recognize_food" }],
         [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
         [{ text: "Закрыть❌", callback_data: "close_menu" }]
       ]
@@ -2550,6 +2583,7 @@ bot.action("start_bot", async (ctx) => {
         [{ text: "Ужин🍝", callback_data: "lunch" }],
         [{ text: "Поиск🔎", callback_data: "search" }],
         [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
+        [{ text: "Распознать блюдо📸", callback_data: "recognize_food" }],
         [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
         [{ text: "Закрыть❌", callback_data: "close_menu" }]
       ]
@@ -2868,7 +2902,7 @@ bot.action("subscription_menu", async (ctx) => {
       message += `🤖 **ИИ распознавание блюд:**\n`;
       message += `📊 Запросов сегодня: ${aiInfo.aiRequestsToday}/5\n`;
       message += `✅ Осталось: ${aiInfo.aiRequestsRemaining}/5\n\n`;
-      message += `📸 Отправьте фото блюда для распознавания и подсчета калорий!\n\n`;
+      message += `💡 С подпиской вы можете распознать 5 блюд по фото и подсчитать их калорийность и БЖУ\n\n`;
     }
 
     message += `💡 С подпиской у вас неограниченный доступ к рецептам!\n\n`;

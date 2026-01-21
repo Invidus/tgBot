@@ -34,9 +34,14 @@ const hf = hasToken
   : new HfInference();
 
 // Модель для распознавания еды
-// Пробуем несколько вариантов моделей
-const FOOD_MODEL = process.env.FOOD_MODEL || 'nateraw/food-image-classification';
-const ALTERNATIVE_MODEL = 'microsoft/resnet-50'; // Альтернативная модель для классификации изображений
+// Используем рабочую модель для классификации изображений
+// Если основная модель недоступна, пробуем альтернативные
+const FOOD_MODEL = process.env.FOOD_MODEL || 'google/vit-base-patch16-224';
+const ALTERNATIVE_MODELS = [
+  'microsoft/resnet-50',
+  'facebook/deit-base-distilled-patch16-224',
+  'nateraw/food-image-classification' // Пробуем и оригинальную, если она станет доступна
+];
 
 console.log(`🔧 Конфигурация Hugging Face:`);
 console.log(`   - Модель: ${FOOD_MODEL}`);
@@ -224,9 +229,59 @@ async function recognizeFood(imageUrl) {
 
             console.log(`✅ Результат от Hugging Face получен (через новый router), количество результатов: ${result?.length || 0}`);
           } catch (routerError) {
-            // Если и новый router не работает, пробуем альтернативную модель
-            console.log(`⚠️ Новый router тоже не работает, пробуем альтернативную модель ${ALTERNATIVE_MODEL}...`);
-            throw oldEndpointError; // Пробрасываем оригинальную ошибку для дальнейшей обработки
+            // Если и новый router не работает, пробуем альтернативные модели
+            console.log(`⚠️ Новый router тоже не работает для модели ${FOOD_MODEL}`);
+            console.log(`🔄 Пробуем альтернативные модели...`);
+
+            // Пробуем альтернативные модели
+            for (const altModel of ALTERNATIVE_MODELS) {
+              if (altModel === FOOD_MODEL) continue; // Пропускаем уже испробованную
+
+              console.log(`📤 Пробуем модель: ${altModel}`);
+
+              try {
+                const altApiUrl = `https://api-inference.huggingface.co/models/${altModel}`;
+                const altResponse = await axios.post(altApiUrl, imageBuffer, {
+                  headers: headers,
+                  timeout: 60000,
+                  responseType: 'json',
+                  validateStatus: (status) => {
+                    return (status >= 200 && status < 300) || status === 503;
+                  }
+                });
+
+                if (altResponse.status === 503) {
+                  const waitTime = altResponse.data?.estimated_time ?
+                    Math.ceil(altResponse.data.estimated_time) * 1000 : 20000;
+                  console.log(`⏳ Модель ${altModel} загружается, ждем ${waitTime/1000} секунд...`);
+                  await new Promise(resolve => setTimeout(resolve, waitTime));
+
+                  const retryAltResponse = await axios.post(altApiUrl, imageBuffer, {
+                    headers: headers,
+                    timeout: 60000,
+                    responseType: 'json',
+                    validateStatus: (status) => status >= 200 && status < 300
+                  });
+
+                  if (!retryAltResponse.data?.error && Array.isArray(retryAltResponse.data)) {
+                    result = retryAltResponse.data;
+                    console.log(`✅ Успешно использована альтернативная модель ${altModel}`);
+                    break;
+                  }
+                } else if (altResponse.data && Array.isArray(altResponse.data)) {
+                  result = altResponse.data;
+                  console.log(`✅ Успешно использована альтернативная модель ${altModel}`);
+                  break;
+                }
+              } catch (altError) {
+                console.log(`⚠️ Модель ${altModel} не работает: ${altError.message}`);
+                continue; // Пробуем следующую модель
+              }
+            }
+
+            if (!result) {
+              throw oldEndpointError; // Если ни одна модель не сработала
+            }
           }
         } else {
           throw oldEndpointError;

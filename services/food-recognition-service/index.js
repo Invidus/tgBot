@@ -295,19 +295,35 @@ async function recognizeWithYandexVision(imageBuffer, imageUrl) {
         // Пробуем использовать ключ как есть (может не сработать)
         iamToken = YANDEX_VISION_API_KEY;
       } else {
-        // Если это OAuth токен, получаем IAM токен через него
+        // Если это OAuth токен (начинается с y0__ или похож на OAuth токен)
+        // OAuth токены формата y0__... нельзя использовать для получения IAM токена напрямую
+        // Попробуем использовать OAuth токен напрямую или получить IAM токен другим способом
+        console.log(`🔄 Обнаружен OAuth токен (формат: ${YANDEX_VISION_API_KEY.substring(0, 5)}...)`);
+        
+        // Пробуем получить IAM токен через OAuth токен
         try {
-          console.log(`🔄 Получение IAM токена через OAuth токен...`);
+          console.log(`🔄 Попытка получения IAM токена через OAuth токен...`);
           const iamResponse = await axios.post('https://iam.api.cloud.yandex.net/iam/v1/tokens', {
             yandexPassportOauthToken: YANDEX_VISION_API_KEY
           }, {
             timeout: 10000,
             headers: { 'Content-Type': 'application/json' }
           });
-          iamToken = iamResponse.data.iamToken;
-          console.log(`✅ IAM токен получен через OAuth токен`);
+          
+          if (iamResponse.data?.iamToken) {
+            iamToken = iamResponse.data.iamToken;
+            console.log(`✅ IAM токен получен через OAuth токен`);
+          } else {
+            throw new Error('IAM токен не получен из ответа');
+          }
         } catch (iamError) {
-          throw new Error(`Не удалось получить IAM токен: ${iamError.message}. Проверьте правильность YANDEX_VISION_API_KEY.`);
+          console.error(`⚠️ Не удалось получить IAM токен через стандартный метод: ${iamError.message}`);
+          console.error(`💡 Попробуем использовать OAuth токен напрямую...`);
+          
+          // Если не получилось получить IAM токен, пробуем использовать OAuth токен напрямую
+          // (некоторые API могут принимать OAuth токены напрямую)
+          iamToken = YANDEX_VISION_API_KEY;
+          console.log(`⚠️ Используется OAuth токен напрямую (может не сработать)`);
         }
       }
     }
@@ -336,8 +352,6 @@ async function recognizeWithYandexVision(imageBuffer, imageUrl) {
     };
 
     // Определяем формат авторизации
-    // Для Yandex Vision API с API ключом сервисного аккаунта нужно использовать заголовок x-api-key
-    // Для IAM токена используется Bearer
     const headers = {
       'Content-Type': 'application/json'
     };
@@ -346,10 +360,14 @@ async function recognizeWithYandexVision(imageBuffer, imageUrl) {
       // API ключ сервисного аккаунта - используем заголовок x-api-key
       headers['x-api-key'] = iamToken;
       console.log(`🔐 Используется заголовок x-api-key для API ключа`);
-    } else {
-      // IAM токен - используем Bearer
+    } else if (iamToken.startsWith('y0__') || iamToken.startsWith('AQAAAA')) {
+      // OAuth токен или IAM токен - используем Bearer
       headers['Authorization'] = `Bearer ${iamToken}`;
-      console.log(`🔐 Используется Bearer токен для IAM`);
+      console.log(`🔐 Используется Bearer токен (OAuth/IAM)`);
+    } else {
+      // По умолчанию используем Bearer
+      headers['Authorization'] = `Bearer ${iamToken}`;
+      console.log(`🔐 Используется Bearer токен (по умолчанию)`);
     }
 
     const response = await axios.post(apiUrl, requestBody, {
@@ -422,14 +440,17 @@ async function recognizeWithYandexVision(imageBuffer, imageUrl) {
       if (error.response.status === 401) {
         console.error(`\n💡 Ошибка 401 (Unauthorized) - неверный токен или ключ`);
         console.error(`   Проверьте:`);
-        console.error(`   1. Правильно ли скопирован YANDEX_VISION_API_KEY (должен начинаться с AQVN...)`);
-        console.error(`   2. Правильно ли указан YANDEX_VISION_FOLDER_ID (должен быть: b1gr6l7cfus1p2tpmghs)`);
+        console.error(`   1. Правильность YANDEX_VISION_API_KEY`);
+        console.error(`      - Если это OAuth токен (y0__...), убедитесь, что он действителен`);
+        console.error(`      - Если это API ключ (AQVN...), проверьте правильность копирования`);
+        console.error(`   2. Правильно ли указан YANDEX_VISION_FOLDER_ID: ${YANDEX_VISION_FOLDER_ID}`);
         console.error(`   3. Убедитесь, что сервисный аккаунт имеет роль ai.vision.user`);
-        console.error(`   4. Проверьте, что ключ создан для правильного сервисного аккаунта`);
-        console.error(`\n   Если ключ неполный или неправильный, создайте новый:`);
-        console.error(`   - Перейдите в IAM → Сервисные аккаунты → ваш аккаунт → Ключи`);
-        console.error(`   - Создайте новый API ключ`);
-        console.error(`   - Скопируйте ВЕСЬ ключ (обычно это длинная строка)`);
+        console.error(`   4. Проверьте, что OAuth токен не истек (срок действия обычно 1 год)`);
+        console.error(`\n   Решения:`);
+        console.error(`   - Если OAuth токен не работает, получите новый:`);
+        console.error(`     https://oauth.yandex.ru/authorize?response_type=token&client_id=ваш_client_id`);
+        console.error(`   - Или используйте Google Vision API как альтернативу`);
+        console.error(`   - Или используйте Hugging Face (бесплатно, но менее надежно)`);
       }
     }
     if (error.response?.status) {

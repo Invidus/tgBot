@@ -281,13 +281,14 @@ async function recognizeWithYandexVision(imageBuffer, imageUrl) {
     if (!iamToken) {
       // API ключ сервисного аккаунта начинается с "AQVN..."
       if (YANDEX_VISION_API_KEY.startsWith('AQVN')) {
-        // Для API ключа сервисного аккаунта Yandex Cloud нужно использовать его напрямую
-        // как IAM токен (в некоторых случаях) или получить IAM токен через другой метод
-        // Попробуем использовать ключ напрямую - Yandex Vision API может принимать API ключ напрямую
-        iamToken = YANDEX_VISION_API_KEY;
-        console.log(`🔑 Используется API ключ сервисного аккаунта напрямую`);
+        // Для Yandex Vision API можно использовать API ключ напрямую через заголовок Api-Key
+        // Или получить IAM токен. Попробуем сначала использовать ключ напрямую с правильным форматом
+        console.log(`🔑 Используется API ключ сервисного аккаунта`);
         console.log(`   Длина ключа: ${YANDEX_VISION_API_KEY.length} символов`);
         console.log(`   Первые символы: ${YANDEX_VISION_API_KEY.substring(0, 10)}...`);
+        
+        // Пробуем использовать API ключ напрямую (для Vision API это должно работать)
+        iamToken = YANDEX_VISION_API_KEY;
       } else {
         // Если это OAuth токен, получаем IAM токен через него
         try {
@@ -329,11 +330,20 @@ async function recognizeWithYandexVision(imageBuffer, imageUrl) {
       ]
     };
 
+    // Определяем формат авторизации
+    // Если это API ключ (начинается с AQVN), используем заголовок Api-Key
+    // Если это IAM токен, используем Bearer
+    const authHeader = iamToken.startsWith('AQVN') 
+      ? `Api-Key ${iamToken}`
+      : `Bearer ${iamToken}`;
+    
+    console.log(`🔐 Формат авторизации: ${iamToken.startsWith('AQVN') ? 'Api-Key' : 'Bearer'}`);
+
     const response = await axios.post(apiUrl, requestBody, {
       timeout: 30000,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${iamToken}`
+        'Authorization': authHeader
       }
     });
 

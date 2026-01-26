@@ -11,7 +11,8 @@ const PORT = process.env.PORT || 3004;
 // ==================== КОНФИГУРАЦИЯ ПРОВАЙДЕРОВ ====================
 
 // Выбор провайдера (openai, google, yandex, huggingface)
-const AI_PROVIDER = process.env.AI_PROVIDER || 'yandex';
+// По умолчанию используем Hugging Face - полностью бесплатно и проще всего настроить
+const AI_PROVIDER = process.env.AI_PROVIDER || 'huggingface';
 
 // OpenAI Configuration
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;

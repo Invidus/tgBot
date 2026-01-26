@@ -28,11 +28,14 @@ const YANDEX_VISION_FOLDER_ID = process.env.YANDEX_VISION_FOLDER_ID;
 
 // Hugging Face Configuration
 const HUGGINGFACE_TOKEN = process.env.HUGGINGFACE_API_TOKEN;
+// Используем модели, которые точно работают через Inference API
+// Убрали nateraw/food-image-classification - она недоступна (404)
 const FOOD_MODEL = process.env.FOOD_MODEL || 'google/vit-base-patch16-224';
 const ALTERNATIVE_MODELS = [
-  'google/vit-base-patch16-224',
-  'microsoft/resnet-50',
-  'facebook/deit-base-distilled-patch16-224'
+  'google/vit-base-patch16-224',  // Работает через Inference API
+  'facebook/deit-base-distilled-patch16-224',  // Работает через Inference API
+  'facebook/convnext-large-224',  // Альтернатива для классификации изображений
+  'microsoft/resnet-50'  // Работает через Inference API
 ];
 
 // Инициализация провайдеров
@@ -467,80 +470,103 @@ async function recognizeWithHuggingFace(imageBuffer, imageUrl) {
   try {
     console.log(`🤖 Использование Hugging Face для распознавания...`);
     
-    // Пробуем использовать новый router endpoint
-    const apiUrl = `https://router.huggingface.co/models/${FOOD_MODEL}`;
-    const headers = {
-      'Content-Type': 'image/jpeg',
-      'Accept': 'application/json'
-    };
-
-    if (HUGGINGFACE_TOKEN) {
-      headers['Authorization'] = `Bearer ${HUGGINGFACE_TOKEN}`;
-    }
-
+    // Используем SDK как основной способ (самый надежный)
     let result;
-    let lastError;
-
-    // Пробуем основную модель
-    for (const model of [FOOD_MODEL, ...ALTERNATIVE_MODELS]) {
-      if (model === FOOD_MODEL && ALTERNATIVE_MODELS.includes(model)) continue;
+    
+    try {
+      console.log(`🔄 Использование Hugging Face SDK...`);
       
-      try {
-        console.log(`📤 Попытка с моделью: ${model}`);
-        const modelUrl = `https://router.huggingface.co/models/${model}`;
-        
-        const response = await axios.post(modelUrl, imageBuffer, {
-          headers: headers,
-          timeout: 60000,
-          responseType: 'json',
-          validateStatus: (status) => (status >= 200 && status < 300) || status === 503
-        });
-
-        if (response.status === 503) {
-          const waitTime = response.data?.estimated_time 
-            ? Math.ceil(response.data.estimated_time) * 1000 
-            : 20000;
-          console.log(`⏳ Модель загружается, ждем ${waitTime/1000} секунд...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
+      // Конвертируем изображение в base64 для SDK
+      const base64Image = imageBuffer.toString('base64');
+      const dataUrl = `data:image/jpeg;base64,${base64Image}`;
+      
+      // Пробуем разные модели через SDK
+      // Убираем дубликаты и модели, которые могут быть недоступны
+      const modelsToTry = [...new Set([FOOD_MODEL, ...ALTERNATIVE_MODELS])].filter(m => 
+        m !== 'nateraw/food-image-classification'  // Эта модель недоступна
+      );
+      
+      for (const model of modelsToTry) {
+        try {
+          console.log(`📤 Попытка с моделью через SDK: ${model}`);
           
-          const retryResponse = await axios.post(modelUrl, imageBuffer, {
-            headers: headers,
-            timeout: 60000,
-            responseType: 'json',
-            validateStatus: (status) => status >= 200 && status < 300
+          result = await hf.imageClassification({
+            model: model,
+            data: dataUrl
           });
           
-          if (retryResponse.data && Array.isArray(retryResponse.data)) {
-            result = retryResponse.data;
+          if (result && Array.isArray(result) && result.length > 0) {
+            console.log(`✅ Модель ${model} сработала через SDK`);
             break;
           }
-        } else if (response.data && Array.isArray(response.data)) {
-          result = response.data;
-          break;
+        } catch (modelError) {
+          console.log(`⚠️ Модель ${model} не работает через SDK: ${modelError.message}`);
+          continue;
         }
-      } catch (error) {
-        lastError = error;
-        console.log(`⚠️ Модель ${model} не работает: ${error.message}`);
-        continue;
       }
-    }
+      
+      // Если SDK не сработал, пробуем прямой HTTP запрос к Inference API
+      if (!result || !Array.isArray(result) || result.length === 0) {
+        console.log(`🔄 SDK не сработал, пробуем прямой HTTP запрос...`);
+        
+        const headers = {
+          'Content-Type': 'image/jpeg',  // Используем правильный Content-Type для изображений
+          'Accept': 'application/json'
+        };
 
-    // Если HTTP не сработал, пробуем SDK
-    if (!result) {
-      try {
-        console.log(`🔄 Пробуем через Hugging Face SDK...`);
-        result = await hf.imageClassification({
-          model: FOOD_MODEL,
-          data: imageBuffer
-        });
-      } catch (sdkError) {
-        console.error(`❌ Hugging Face SDK тоже не сработал: ${sdkError.message}`);
-        throw lastError || sdkError;
+        if (HUGGINGFACE_TOKEN) {
+          headers['Authorization'] = `Bearer ${HUGGINGFACE_TOKEN}`;
+        }
+
+        // Пробуем Inference API endpoint
+        for (const model of modelsToTry) {
+          try {
+            console.log(`📤 Попытка HTTP запрос к модели: ${model}`);
+            const apiUrl = `https://api-inference.huggingface.co/models/${model}`;
+            
+            const response = await axios.post(apiUrl, imageBuffer, {
+              headers: headers,
+              timeout: 60000,
+              responseType: 'json',
+              validateStatus: (status) => (status >= 200 && status < 300) || status === 503
+            });
+
+            if (response.status === 503) {
+              const waitTime = response.data?.estimated_time 
+                ? Math.ceil(response.data.estimated_time) * 1000 
+                : 20000;
+              console.log(`⏳ Модель загружается, ждем ${waitTime/1000} секунд...`);
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+              
+              const retryResponse = await axios.post(apiUrl, imageBuffer, {
+                headers: headers,
+                timeout: 60000,
+                responseType: 'json',
+                validateStatus: (status) => status >= 200 && status < 300
+              });
+              
+              if (retryResponse.data && Array.isArray(retryResponse.data)) {
+                result = retryResponse.data;
+                break;
+              }
+            } else if (response.data && Array.isArray(response.data)) {
+              result = response.data;
+              break;
+            }
+          } catch (httpError) {
+            console.log(`⚠️ HTTP запрос к ${model} не работает: ${httpError.message}`);
+            continue;
+          }
+        }
       }
+    } catch (sdkError) {
+      console.error(`❌ Hugging Face SDK не сработал: ${sdkError.message}`);
+      throw sdkError;
     }
 
     if (!result || !Array.isArray(result) || result.length === 0) {
-      throw new Error('Hugging Face не вернул результатов');
+      console.error(`❌ Hugging Face не вернул результатов. Попробованы модели: ${[FOOD_MODEL, ...ALTERNATIVE_MODELS].join(', ')}`);
+      throw new Error('Hugging Face не вернул результатов. Возможно, модели недоступны или требуется токен с правильными правами.');
     }
 
     // Сортируем по уверенности и берем топ результаты
@@ -565,6 +591,16 @@ async function recognizeWithHuggingFace(imageBuffer, imageUrl) {
     };
   } catch (error) {
     console.error(`❌ Ошибка Hugging Face: ${error.message}`);
+    if (error.response?.status === 404) {
+      console.error(`💡 Ошибка 404: Модель не найдена или недоступна`);
+      console.error(`   Проверьте:`);
+      console.error(`   1. Правильность токена HUGGINGFACE_API_TOKEN`);
+      console.error(`   2. Токен должен иметь право "Make calls to Inference Providers"`);
+      console.error(`   3. Модель может быть недоступна - попробуйте другую модель`);
+      console.error(`\n   Рекомендуется:`);
+      console.error(`   - Использовать модель google/vit-base-patch16-224 (работает стабильно)`);
+      console.error(`   - Или настроить Google Vision API как альтернативу`);
+    }
     throw error;
   }
 }

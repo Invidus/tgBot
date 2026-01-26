@@ -279,24 +279,29 @@ async function recognizeWithYandexVision(imageBuffer, imageUrl) {
     
     // Если IAM токен не указан, получаем его через API ключ сервисного аккаунта
     if (!iamToken) {
-      try {
-        // Пробуем получить IAM токен через API ключ сервисного аккаунта
-        const iamResponse = await axios.post('https://iam.api.cloud.yandex.net/iam/v1/tokens', {
-          yandexPassportOauthToken: YANDEX_VISION_API_KEY
-        }, {
-          timeout: 10000,
-          headers: { 'Content-Type': 'application/json' }
-        });
-        iamToken = iamResponse.data.iamToken;
-        console.log(`✅ IAM токен получен через OAuth токен`);
-      } catch (iamError) {
-        // Если это API ключ сервисного аккаунта, используем его напрямую
-        // API ключ сервисного аккаунта начинается с "AQVN..."
-        if (YANDEX_VISION_API_KEY.startsWith('AQVN')) {
-          iamToken = YANDEX_VISION_API_KEY;
-          console.log(`✅ Используется API ключ сервисного аккаунта`);
-        } else {
-          throw new Error(`Не удалось получить IAM токен: ${iamError.message}`);
+      // API ключ сервисного аккаунта начинается с "AQVN..."
+      if (YANDEX_VISION_API_KEY.startsWith('AQVN')) {
+        // Для API ключа сервисного аккаунта Yandex Cloud нужно использовать его напрямую
+        // как IAM токен (в некоторых случаях) или получить IAM токен через другой метод
+        // Попробуем использовать ключ напрямую - Yandex Vision API может принимать API ключ напрямую
+        iamToken = YANDEX_VISION_API_KEY;
+        console.log(`🔑 Используется API ключ сервисного аккаунта напрямую`);
+        console.log(`   Длина ключа: ${YANDEX_VISION_API_KEY.length} символов`);
+        console.log(`   Первые символы: ${YANDEX_VISION_API_KEY.substring(0, 10)}...`);
+      } else {
+        // Если это OAuth токен, получаем IAM токен через него
+        try {
+          console.log(`🔄 Получение IAM токена через OAuth токен...`);
+          const iamResponse = await axios.post('https://iam.api.cloud.yandex.net/iam/v1/tokens', {
+            yandexPassportOauthToken: YANDEX_VISION_API_KEY
+          }, {
+            timeout: 10000,
+            headers: { 'Content-Type': 'application/json' }
+          });
+          iamToken = iamResponse.data.iamToken;
+          console.log(`✅ IAM токен получен через OAuth токен`);
+        } catch (iamError) {
+          throw new Error(`Не удалось получить IAM токен: ${iamError.message}. Проверьте правильность YANDEX_VISION_API_KEY.`);
         }
       }
     }
@@ -392,6 +397,23 @@ async function recognizeWithYandexVision(imageBuffer, imageUrl) {
     console.error(`❌ Ошибка Yandex Vision: ${error.message}`);
     if (error.response?.data) {
       console.error(`   Детали ошибки:`, JSON.stringify(error.response.data));
+      
+      // Детальная диагностика ошибок
+      if (error.response.status === 401) {
+        console.error(`\n💡 Ошибка 401 (Unauthorized) - неверный токен или ключ`);
+        console.error(`   Проверьте:`);
+        console.error(`   1. Правильно ли скопирован YANDEX_VISION_API_KEY (должен начинаться с AQVN...)`);
+        console.error(`   2. Правильно ли указан YANDEX_VISION_FOLDER_ID (должен быть: b1gr6l7cfus1p2tpmghs)`);
+        console.error(`   3. Убедитесь, что сервисный аккаунт имеет роль ai.vision.user`);
+        console.error(`   4. Проверьте, что ключ создан для правильного сервисного аккаунта`);
+        console.error(`\n   Если ключ неполный или неправильный, создайте новый:`);
+        console.error(`   - Перейдите в IAM → Сервисные аккаунты → ваш аккаунт → Ключи`);
+        console.error(`   - Создайте новый API ключ`);
+        console.error(`   - Скопируйте ВЕСЬ ключ (обычно это длинная строка)`);
+      }
+    }
+    if (error.response?.status) {
+      console.error(`   HTTP статус: ${error.response.status}`);
     }
     throw error;
   }

@@ -109,8 +109,20 @@ services:
     container_name: tgbot_food_recognition
     environment:
       PORT: 3004
+      AI_PROVIDER: ${AI_PROVIDER:-yandex}
+      # OpenAI
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
+      # Google Vision
+      GOOGLE_VISION_API_KEY: ${GOOGLE_VISION_API_KEY:-}
+      GOOGLE_VISION_PROJECT_ID: ${GOOGLE_VISION_PROJECT_ID:-}
+      # Yandex Vision (рекомендуется для России - бесплатно!)
+      YANDEX_VISION_API_KEY: ${YANDEX_VISION_API_KEY:-}
+      YANDEX_VISION_FOLDER_ID: ${YANDEX_VISION_FOLDER_ID:-}
+      YANDEX_IAM_TOKEN: ${YANDEX_IAM_TOKEN:-}
+      # Hugging Face (резервный)
       HUGGINGFACE_API_TOKEN: ${HUGGINGFACE_API_TOKEN:-}
-      FOOD_MODEL: ${FOOD_MODEL:-nateraw/food-image-classification}
+      FOOD_MODEL: ${FOOD_MODEL:-google/vit-base-patch16-224}
     restart: unless-stopped
     networks:
       - tgbot_network

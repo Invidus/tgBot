@@ -86,8 +86,19 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
 
     const concepts = response.data.outputs[0].data.concepts;
     
+    // Фильтруем слишком общие понятия, которые не являются конкретными блюдами
+    const generalTerms = ['food', 'dish', 'meal', 'cuisine', 'cooking', 'recipe', 'ingredient'];
+    const filteredConcepts = concepts.filter(c => {
+      const name = (c.name || '').toLowerCase();
+      // Исключаем слишком общие термины, если есть более конкретные варианты
+      return !generalTerms.some(term => name === term || name.includes(term + ' '));
+    });
+    
+    // Используем отфильтрованные результаты, если они есть, иначе оригинальные
+    const conceptsToUse = filteredConcepts.length > 0 ? filteredConcepts : concepts;
+    
     // Сортируем по уверенности и берем топ результаты
-    const topConcepts = concepts
+    const topConcepts = conceptsToUse
       .sort((a, b) => (b.value || 0) - (a.value || 0))
       .slice(0, 5);
 
@@ -95,9 +106,22 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
       throw new Error('Не удалось определить блюдо через Clarifai API');
     }
 
-    // Берем наиболее вероятное блюдо
-    const dishName = topConcepts[0].name;
-    const confidence = topConcepts[0].value || 0.7;
+    // Улучшенная логика выбора: если уверенность первого результата очень низкая (<30%),
+    // ищем первый результат с уверенностью выше 30%
+    let selectedConcept = topConcepts[0];
+    const topConfidence = topConcepts[0].value || 0;
+    
+    // Если уверенность первого результата очень низкая, ищем более надежный вариант
+    if (topConfidence < 0.3 && topConcepts.length > 1) {
+      const betterMatch = topConcepts.find(c => (c.value || 0) >= 0.3);
+      if (betterMatch) {
+        selectedConcept = betterMatch;
+        console.log(`🔄 Выбран более надежный вариант: ${betterMatch.name} (уверенность: ${Math.round(betterMatch.value * 100)}%) вместо ${topConcepts[0].name} (${Math.round(topConfidence * 100)}%)`);
+      }
+    }
+
+    const dishName = selectedConcept.name;
+    const confidence = selectedConcept.value || 0.7;
 
     // Переводим на русский, если нужно
     const dishNameRu = translateToRussian(dishName);
@@ -108,10 +132,13 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
       dishName: dishNameRu,
       confidence: confidence,
       provider: 'Clarifai',
-      alternatives: topConcepts.slice(1, 4).map(c => ({
-        name: translateToRussian(c.name),
-        confidence: c.value || 0.5
-      }))
+      alternatives: topConcepts
+        .filter(c => c !== selectedConcept) // Исключаем уже выбранный вариант
+        .slice(0, 3)
+        .map(c => ({
+          name: translateToRussian(c.name),
+          confidence: c.value || 0.5
+        }))
     };
   } catch (error) {
     console.error(`❌ Ошибка Clarifai: ${error.message}`);
@@ -126,12 +153,16 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
   }
 }
 
-// Простая функция перевода (можно улучшить)
+// Улучшенная функция перевода с поддержкой большего количества блюд
 function translateToRussian(englishName) {
   const translations = {
+    // Основные блюда
     'pizza': 'пицца',
     'burger': 'бургер',
     'pasta': 'паста',
+    'macaroni': 'макароны',
+    'noodle': 'лапша',
+    'spaghetti': 'спагетти',
     'salad': 'салат',
     'soup': 'суп',
     'rice': 'рис',
@@ -145,24 +176,48 @@ function translateToRussian(englishName) {
     'pasta dish': 'паста',
     'food': 'еда',
     'dish': 'блюдо',
+    'meal': 'блюдо',
+    // Фрукты и овощи
     'apple': 'яблоко',
     'banana': 'банан',
     'orange': 'апельсин',
+    'vegetable': 'овощ',
+    'fruit': 'фрукт',
+    // Молочные продукты
+    'cheese': 'сыр',
+    'milk': 'молоко',
+    // Мясо
+    'meat': 'мясо',
+    'sausage': 'колбаса',
+    'beef': 'говядина',
+    'pork': 'свинина',
+    // Другое
+    'egg': 'яйцо',
     'coffee': 'кофе',
     'tea': 'чай',
-    'milk': 'молоко',
-    'egg': 'яйцо',
-    'cheese': 'сыр',
-    'meat': 'мясо',
-    'vegetable': 'овощ',
-    'fruit': 'фрукт'
+    'mushroom': 'гриб'
   };
 
   const lower = englishName.toLowerCase();
+  
+  // Сначала проверяем точные совпадения
+  if (translations[lower]) {
+    return translations[lower];
+  }
+  
+  // Затем проверяем частичные совпадения
   for (const [en, ru] of Object.entries(translations)) {
     if (lower.includes(en)) {
       return ru;
     }
+  }
+  
+  // Если это комбинация (например, "pasta with meat"), пытаемся определить основное блюдо
+  if (lower.includes('pasta') || lower.includes('macaroni') || lower.includes('noodle')) {
+    if (lower.includes('meat') || lower.includes('beef') || lower.includes('pork')) {
+      return 'макароны с мясом';
+    }
+    return 'паста';
   }
   
   return englishName; // Возвращаем оригинал, если нет перевода
@@ -183,7 +238,8 @@ async function getCalories(dishName) {
     const searchUrl = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(dishName)}&search_simple=1&action=process&json=1&page_size=5`;
 
     const response = await axios.get(searchUrl, {
-      timeout: 10000
+      timeout: 20000, // Увеличено с 10000 до 20000ms для избежания timeout
+      validateStatus: (status) => status === 200
     });
 
     if (response.data && response.data.products && response.data.products.length > 0) {
@@ -202,7 +258,12 @@ async function getCalories(dishName) {
 
     return getEstimatedCalories(dishName);
   } catch (error) {
-    console.error('❌ Ошибка получения калорий:', error);
+    // Улучшенная обработка ошибок - не логируем timeout как критическую ошибку
+    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      console.warn(`⚠️ Timeout при получении калорий для "${dishName}", используем примерные значения`);
+    } else {
+      console.error('❌ Ошибка получения калорий:', error.message);
+    }
     return getEstimatedCalories(dishName);
   }
 }
@@ -211,12 +272,17 @@ function getEstimatedCalories(dishName) {
   const dishNameLower = dishName.toLowerCase();
 
   const calorieDatabase = {
+    // Основные блюда
     'пицца': { calories: 266, protein: 11, carbs: 33, fats: 10 },
     'pizza': { calories: 266, protein: 11, carbs: 33, fats: 10 },
     'бургер': { calories: 295, protein: 15, carbs: 30, fats: 14 },
     'burger': { calories: 295, protein: 15, carbs: 30, fats: 14 },
     'паста': { calories: 131, protein: 5, carbs: 25, fats: 1 },
     'pasta': { calories: 131, protein: 5, carbs: 25, fats: 1 },
+    'макароны': { calories: 131, protein: 5, carbs: 25, fats: 1 },
+    'macaroni': { calories: 131, protein: 5, carbs: 25, fats: 1 },
+    'макароны с мясом': { calories: 180, protein: 10, carbs: 25, fats: 5 },
+    'pasta with meat': { calories: 180, protein: 10, carbs: 25, fats: 5 },
     'салат': { calories: 20, protein: 1, carbs: 4, fats: 0 },
     'salad': { calories: 20, protein: 1, carbs: 4, fats: 0 },
     'суп': { calories: 50, protein: 2, carbs: 8, fats: 1 },
@@ -232,7 +298,12 @@ function getEstimatedCalories(dishName) {
     'торт': { calories: 367, protein: 5, carbs: 53, fats: 15 },
     'cake': { calories: 367, protein: 5, carbs: 53, fats: 15 },
     'суши': { calories: 150, protein: 5, carbs: 30, fats: 1 },
-    'sushi': { calories: 150, protein: 5, carbs: 30, fats: 1 }
+    'sushi': { calories: 150, protein: 5, carbs: 30, fats: 1 },
+    // Мясо
+    'мясо': { calories: 250, protein: 26, carbs: 0, fats: 15 },
+    'meat': { calories: 250, protein: 26, carbs: 0, fats: 15 },
+    'сыр': { calories: 363, protein: 25, carbs: 0, fats: 30 },
+    'cheese': { calories: 363, protein: 25, carbs: 0, fats: 30 }
   };
 
   for (const [key, value] of Object.entries(calorieDatabase)) {

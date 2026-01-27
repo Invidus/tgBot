@@ -1,56 +1,23 @@
 import express from 'express';
 import axios from 'axios';
-import { HfInference } from '@huggingface/inference';
-import OpenAI from 'openai';
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3004;
 
-// ==================== КОНФИГУРАЦИЯ ПРОВАЙДЕРОВ ====================
+// ==================== КОНФИГУРАЦИЯ CLARIFAI ====================
 
-// Выбор провайдера (openai, google, yandex, huggingface)
-// По умолчанию используем Hugging Face - полностью бесплатно и проще всего настроить
-const AI_PROVIDER = process.env.AI_PROVIDER || 'huggingface';
+const CLARIFAI_API_KEY = process.env.CLARIFAI_API_KEY;
 
-// OpenAI Configuration
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
-
-// Google Vision API Configuration
-const GOOGLE_VISION_API_KEY = process.env.GOOGLE_VISION_API_KEY;
-const GOOGLE_VISION_PROJECT_ID = process.env.GOOGLE_VISION_PROJECT_ID;
-
-// Yandex Vision API Configuration (бесплатно для России!)
-const YANDEX_VISION_API_KEY = process.env.YANDEX_VISION_API_KEY;
-const YANDEX_VISION_FOLDER_ID = process.env.YANDEX_VISION_FOLDER_ID;
-
-// Hugging Face Configuration
-const HUGGINGFACE_TOKEN = process.env.HUGGINGFACE_API_TOKEN;
-// Используем модели, которые точно работают через Inference API
-// Убрали nateraw/food-image-classification - она недоступна (404)
-const FOOD_MODEL = process.env.FOOD_MODEL || 'google/vit-base-patch16-224';
-const ALTERNATIVE_MODELS = [
-  'google/vit-base-patch16-224',  // Работает через Inference API
-  'facebook/deit-base-distilled-patch16-224',  // Работает через Inference API
-  'facebook/convnext-large-224',  // Альтернатива для классификации изображений
-  'microsoft/resnet-50'  // Работает через Inference API
-];
-
-// Инициализация провайдеров
-const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
-const hf = HUGGINGFACE_TOKEN 
-  ? new HfInference(HUGGINGFACE_TOKEN) 
-  : new HfInference();
+if (!CLARIFAI_API_KEY) {
+  console.error('❌ CLARIFAI_API_KEY не указан в переменных окружения!');
+  console.error('   Получите токен на https://clarifai.com/settings/security');
+}
 
 // Логирование конфигурации
-console.log(`🔧 Конфигурация AI провайдеров:`);
-console.log(`   - Основной провайдер: ${AI_PROVIDER}`);
-console.log(`   - OpenAI: ${openai ? '✅ настроен' : '❌ не настроен (нужен OPENAI_API_KEY)'}`);
-console.log(`   - Google Vision: ${GOOGLE_VISION_API_KEY ? '✅ настроен' : '❌ не настроен (нужен GOOGLE_VISION_API_KEY)'}`);
-console.log(`   - Yandex Vision: ${YANDEX_VISION_API_KEY ? '✅ настроен' : '❌ не настроен (нужен YANDEX_VISION_API_KEY)'}`);
-console.log(`   - Hugging Face: ${HUGGINGFACE_TOKEN ? '✅ настроен' : '⚠️ без токена'}`);
+console.log(`🔧 Конфигурация AI провайдера:`);
+console.log(`   - Clarifai: ${CLARIFAI_API_KEY ? '✅ настроен' : '❌ не настроен (нужен CLARIFAI_API_KEY)'}`);
 
 // ==================== ЗАГРУЗКА ИЗОБРАЖЕНИЯ ====================
 
@@ -76,93 +43,31 @@ async function loadImage(imageUrl) {
   }
 }
 
-// ==================== OPENAI GPT-4 VISION ====================
+// ==================== CLARIFAI API ====================
 
-async function recognizeWithOpenAI(imageBuffer, imageUrl) {
-  if (!openai) {
-    throw new Error('OpenAI API не настроен. Укажите OPENAI_API_KEY в переменных окружения.');
+async function recognizeWithClarifai(imageBuffer, imageUrl) {
+  if (!CLARIFAI_API_KEY) {
+    throw new Error('Clarifai API не настроен. Укажите CLARIFAI_API_KEY в переменных окружения.');
   }
 
   try {
-    console.log(`🤖 Использование OpenAI ${OPENAI_MODEL} для распознавания...`);
+    console.log(`🤖 Использование Clarifai для распознавания...`);
     
     // Конвертируем изображение в base64
     const base64Image = imageBuffer.toString('base64');
     
-    const response = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: `Определи, какое блюдо изображено на этой фотографии. Ответь ТОЛЬКО названием блюда на русском языке, без дополнительных объяснений. Если это не еда, ответь "не еда".`
-            },
-            {
-              type: 'image_url',
-              image_url: {
-                url: `data:image/jpeg;base64,${base64Image}`
-              }
-            }
-          ]
-        }
-      ],
-      max_tokens: 50,
-      temperature: 0.3
-    });
-
-    const dishName = response.choices[0]?.message?.content?.trim();
-    
-    if (!dishName || dishName.toLowerCase().includes('не еда')) {
-      throw new Error('На изображении не распознано блюдо');
-    }
-
-    console.log(`✅ OpenAI распознал: ${dishName}`);
-    
-    return {
-      dishName: dishName,
-      confidence: 0.95, // OpenAI обычно очень точный
-      provider: 'OpenAI',
-      alternatives: []
-    };
-  } catch (error) {
-    console.error(`❌ Ошибка OpenAI: ${error.message}`);
-    throw error;
-  }
-}
-
-// ==================== GOOGLE VISION API ====================
-
-async function recognizeWithGoogleVision(imageBuffer, imageUrl) {
-  if (!GOOGLE_VISION_API_KEY) {
-    throw new Error('Google Vision API не настроен. Укажите GOOGLE_VISION_API_KEY в переменных окружения.');
-  }
-
-  try {
-    console.log(`🤖 Использование Google Vision API для распознавания...`);
-    
-    const base64Image = imageBuffer.toString('base64');
-    
-    // Используем Google Vision API для определения объектов и текста
-    const apiUrl = `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_VISION_API_KEY}`;
+    // Используем публичную модель Clarifai для распознавания еды
+    // food-item-recognition - распознает более 1000 видов еды
+    const apiUrl = 'https://api.clarifai.com/v2/users/clarifai/apps/main/models/food-item-recognition/outputs';
     
     const requestBody = {
-      requests: [
+      inputs: [
         {
-          image: {
-            content: base64Image
-          },
-          features: [
-            {
-              type: 'LABEL_DETECTION',
-              maxResults: 10
-            },
-            {
-              type: 'OBJECT_LOCALIZATION',
-              maxResults: 10
+          data: {
+            image: {
+              base64: base64Image
             }
-          ]
+          }
         }
       ]
     };
@@ -170,67 +75,53 @@ async function recognizeWithGoogleVision(imageBuffer, imageUrl) {
     const response = await axios.post(apiUrl, requestBody, {
       timeout: 30000,
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Authorization': `Key ${CLARIFAI_API_KEY}`
       }
     });
 
-    if (!response.data?.responses?.[0]) {
-      throw new Error('Пустой ответ от Google Vision API');
+    if (!response.data?.outputs?.[0]?.data?.concepts) {
+      throw new Error('Пустой ответ от Clarifai API');
     }
 
-    const result = response.data.responses[0];
-    const labels = result.labelAnnotations || [];
-    const objects = result.localizedObjectAnnotations || [];
+    const concepts = response.data.outputs[0].data.concepts;
+    
+    // Сортируем по уверенности и берем топ результаты
+    const topConcepts = concepts
+      .sort((a, b) => (b.value || 0) - (a.value || 0))
+      .slice(0, 5);
 
-    // Ищем еду среди меток
-    const foodLabels = labels.filter(label => {
-      const desc = label.description?.toLowerCase() || '';
-      return desc.includes('food') || desc.includes('dish') || desc.includes('meal') || 
-             desc.includes('cuisine') || desc.includes('recipe') || desc.includes('cooking');
-    });
-
-    // Ищем объекты, связанные с едой
-    const foodObjects = objects.filter(obj => {
-      const name = obj.name?.toLowerCase() || '';
-      return name.includes('food') || name.includes('dish') || name.includes('meal');
-    });
-
-    // Берем наиболее релевантную метку
-    let dishName = null;
-    let confidence = 0.7;
-
-    if (foodLabels.length > 0) {
-      dishName = foodLabels[0].description;
-      confidence = foodLabels[0].score || 0.7;
-    } else if (labels.length > 0) {
-      // Если нет явных меток еды, берем первую метку
-      dishName = labels[0].description;
-      confidence = labels[0].score || 0.6;
-    } else if (foodObjects.length > 0) {
-      dishName = foodObjects[0].name;
-      confidence = 0.7;
+    if (!topConcepts[0] || !topConcepts[0].name) {
+      throw new Error('Не удалось определить блюдо через Clarifai API');
     }
 
-    if (!dishName) {
-      throw new Error('Не удалось определить блюдо через Google Vision API');
-    }
+    // Берем наиболее вероятное блюдо
+    const dishName = topConcepts[0].name;
+    const confidence = topConcepts[0].value || 0.7;
 
-    // Переводим на русский, если нужно (упрощенная версия)
+    // Переводим на русский, если нужно
     const dishNameRu = translateToRussian(dishName);
 
-    console.log(`✅ Google Vision распознал: ${dishNameRu} (уверенность: ${Math.round(confidence * 100)}%)`);
+    console.log(`✅ Clarifai распознал: ${dishNameRu} (уверенность: ${Math.round(confidence * 100)}%)`);
     
     return {
       dishName: dishNameRu,
       confidence: confidence,
-      provider: 'Google Vision',
-      alternatives: labels.slice(1, 4).map(l => ({
-        name: translateToRussian(l.description),
-        confidence: l.score || 0.5
+      provider: 'Clarifai',
+      alternatives: topConcepts.slice(1, 4).map(c => ({
+        name: translateToRussian(c.name),
+        confidence: c.value || 0.5
       }))
     };
   } catch (error) {
-    console.error(`❌ Ошибка Google Vision: ${error.message}`);
+    console.error(`❌ Ошибка Clarifai: ${error.message}`);
+    if (error.response?.status === 401) {
+      console.error(`💡 Ошибка 401: Неверный API ключ. Проверьте CLARIFAI_API_KEY`);
+    } else if (error.response?.status === 403) {
+      console.error(`💡 Ошибка 403: Недостаточно прав. Убедитесь, что токен имеет scope "Model: Predict"`);
+    } else if (error.response?.data) {
+      console.error(`   Детали ошибки:`, JSON.stringify(error.response.data));
+    }
     throw error;
   }
 }
@@ -253,7 +144,18 @@ function translateToRussian(englishName) {
     'steak': 'стейк',
     'pasta dish': 'паста',
     'food': 'еда',
-    'dish': 'блюдо'
+    'dish': 'блюдо',
+    'apple': 'яблоко',
+    'banana': 'банан',
+    'orange': 'апельсин',
+    'coffee': 'кофе',
+    'tea': 'чай',
+    'milk': 'молоко',
+    'egg': 'яйцо',
+    'cheese': 'сыр',
+    'meat': 'мясо',
+    'vegetable': 'овощ',
+    'fruit': 'фрукт'
   };
 
   const lower = englishName.toLowerCase();
@@ -266,397 +168,11 @@ function translateToRussian(englishName) {
   return englishName; // Возвращаем оригинал, если нет перевода
 }
 
-// ==================== YANDEX VISION API ====================
-
-async function recognizeWithYandexVision(imageBuffer, imageUrl) {
-  if (!YANDEX_VISION_API_KEY || !YANDEX_VISION_FOLDER_ID) {
-    throw new Error('Yandex Vision API не настроен. Укажите YANDEX_VISION_API_KEY и YANDEX_VISION_FOLDER_ID в переменных окружения.');
-  }
-
-  try {
-    console.log(`🤖 Использование Yandex Vision API для распознавания...`);
-    
-    const base64Image = imageBuffer.toString('base64');
-    
-    // Получаем IAM токен для аутентификации
-    let iamToken = process.env.YANDEX_IAM_TOKEN;
-    
-    // Если IAM токен не указан, получаем его через API ключ сервисного аккаунта
-    if (!iamToken) {
-      // API ключ сервисного аккаунта начинается с "AQVN..."
-      if (YANDEX_VISION_API_KEY.startsWith('AQVN')) {
-        console.log(`🔑 Обнаружен API ключ сервисного аккаунта`);
-        console.log(`   Длина ключа: ${YANDEX_VISION_API_KEY.length} символов`);
-        console.log(`   Первые символы: ${YANDEX_VISION_API_KEY.substring(0, 10)}...`);
-        
-        // Для Yandex Vision API с API ключом сервисного аккаунта нужно использовать
-        // специальный формат авторизации через заголовок x-api-key
-        // Или получить IAM токен через другой метод
-        // Попробуем использовать ключ напрямую с заголовком x-api-key
-        console.log(`⚠️ API ключ сервисного аккаунта требует IAM токен или специальный формат`);
-        console.log(`💡 Рекомендуется использовать OAuth токен или получить IAM токен вручную`);
-        
-        // Пробуем использовать ключ как есть (может не сработать)
-        iamToken = YANDEX_VISION_API_KEY;
-      } else {
-        // Если это OAuth токен (начинается с y0__ или похож на OAuth токен)
-        // OAuth токены формата y0__... нельзя использовать для получения IAM токена напрямую
-        // Попробуем использовать OAuth токен напрямую или получить IAM токен другим способом
-        console.log(`🔄 Обнаружен OAuth токен (формат: ${YANDEX_VISION_API_KEY.substring(0, 5)}...)`);
-        
-        // Пробуем получить IAM токен через OAuth токен
-        try {
-          console.log(`🔄 Попытка получения IAM токена через OAuth токен...`);
-          const iamResponse = await axios.post('https://iam.api.cloud.yandex.net/iam/v1/tokens', {
-            yandexPassportOauthToken: YANDEX_VISION_API_KEY
-          }, {
-            timeout: 10000,
-            headers: { 'Content-Type': 'application/json' }
-          });
-          
-          if (iamResponse.data?.iamToken) {
-            iamToken = iamResponse.data.iamToken;
-            console.log(`✅ IAM токен получен через OAuth токен`);
-          } else {
-            throw new Error('IAM токен не получен из ответа');
-          }
-        } catch (iamError) {
-          console.error(`⚠️ Не удалось получить IAM токен через стандартный метод: ${iamError.message}`);
-          console.error(`💡 Попробуем использовать OAuth токен напрямую...`);
-          
-          // Если не получилось получить IAM токен, пробуем использовать OAuth токен напрямую
-          // (некоторые API могут принимать OAuth токены напрямую)
-          iamToken = YANDEX_VISION_API_KEY;
-          console.log(`⚠️ Используется OAuth токен напрямую (может не сработать)`);
-        }
-      }
-    }
-    
-    // Используем Yandex Vision API
-    const apiUrl = `https://vision.api.cloud.yandex.net/vision/v1/batchAnalyze`;
-    
-    const requestBody = {
-      folderId: YANDEX_VISION_FOLDER_ID,
-      analyzeSpecs: [
-        {
-          content: base64Image,
-          features: [
-            {
-              type: 'CLASSIFICATION',
-              classificationConfig: {
-                model: 'food' // Специальная модель для еды
-              }
-            },
-            {
-              type: 'TEXT_DETECTION'
-            }
-          ]
-        }
-      ]
-    };
-
-    // Определяем формат авторизации
-    const headers = {
-      'Content-Type': 'application/json'
-    };
-    
-    if (iamToken.startsWith('AQVN')) {
-      // API ключ сервисного аккаунта - используем заголовок x-api-key
-      headers['x-api-key'] = iamToken;
-      console.log(`🔐 Используется заголовок x-api-key для API ключа`);
-    } else if (iamToken.startsWith('y0__') || iamToken.startsWith('AQAAAA')) {
-      // OAuth токен или IAM токен - используем Bearer
-      headers['Authorization'] = `Bearer ${iamToken}`;
-      console.log(`🔐 Используется Bearer токен (OAuth/IAM)`);
-    } else {
-      // По умолчанию используем Bearer
-      headers['Authorization'] = `Bearer ${iamToken}`;
-      console.log(`🔐 Используется Bearer токен (по умолчанию)`);
-    }
-
-    const response = await axios.post(apiUrl, requestBody, {
-      timeout: 30000,
-      headers: headers
-    });
-
-    if (!response.data?.results?.[0]) {
-      throw new Error('Пустой ответ от Yandex Vision API');
-    }
-
-    const result = response.data.results[0];
-    const classifications = result.classification?.properties || [];
-    const textBlocks = result.textDetection?.blocks || [];
-
-    // Ищем еду среди классификаций
-    let dishName = null;
-    let confidence = 0.7;
-
-    if (classifications.length > 0) {
-      // Берем наиболее вероятную классификацию
-      const topClassification = classifications
-        .sort((a, b) => (b.probability || 0) - (a.probability || 0))[0];
-      
-      if (topClassification && topClassification.name) {
-        dishName = topClassification.name;
-        confidence = topClassification.probability || 0.7;
-      }
-    }
-
-    // Если не нашли через классификацию, пробуем извлечь из текста
-    if (!dishName && textBlocks.length > 0) {
-      const text = textBlocks
-        .map(block => block.lines?.map(line => line.words?.map(w => w.text).join(' ')).join(' ') || '')
-        .join(' ')
-        .toLowerCase();
-      
-      // Ищем ключевые слова о еде
-      const foodKeywords = ['пицца', 'бургер', 'салат', 'суп', 'паста', 'рис', 'курица', 'рыба', 'хлеб', 'торт'];
-      for (const keyword of foodKeywords) {
-        if (text.includes(keyword)) {
-          dishName = keyword;
-          confidence = 0.6;
-          break;
-        }
-      }
-    }
-
-    if (!dishName) {
-      throw new Error('Не удалось определить блюдо через Yandex Vision API');
-    }
-
-    console.log(`✅ Yandex Vision распознал: ${dishName} (уверенность: ${Math.round(confidence * 100)}%)`);
-    
-    return {
-      dishName: dishName,
-      confidence: confidence,
-      provider: 'Yandex Vision',
-      alternatives: classifications.slice(1, 4).map(c => ({
-        name: c.name || 'неизвестно',
-        confidence: c.probability || 0.5
-      }))
-    };
-  } catch (error) {
-    console.error(`❌ Ошибка Yandex Vision: ${error.message}`);
-    if (error.response?.data) {
-      console.error(`   Детали ошибки:`, JSON.stringify(error.response.data));
-      
-      // Детальная диагностика ошибок
-      if (error.response.status === 401) {
-        console.error(`\n💡 Ошибка 401 (Unauthorized) - неверный токен или ключ`);
-        console.error(`   Проверьте:`);
-        console.error(`   1. Правильность YANDEX_VISION_API_KEY`);
-        console.error(`      - Если это OAuth токен (y0__...), убедитесь, что он действителен`);
-        console.error(`      - Если это API ключ (AQVN...), проверьте правильность копирования`);
-        console.error(`   2. Правильно ли указан YANDEX_VISION_FOLDER_ID: ${YANDEX_VISION_FOLDER_ID}`);
-        console.error(`   3. Убедитесь, что сервисный аккаунт имеет роль ai.vision.user`);
-        console.error(`   4. Проверьте, что OAuth токен не истек (срок действия обычно 1 год)`);
-        console.error(`\n   Решения:`);
-        console.error(`   - Если OAuth токен не работает, получите новый:`);
-        console.error(`     https://oauth.yandex.ru/authorize?response_type=token&client_id=ваш_client_id`);
-        console.error(`   - Или используйте Google Vision API как альтернативу`);
-        console.error(`   - Или используйте Hugging Face (бесплатно, но менее надежно)`);
-      }
-    }
-    if (error.response?.status) {
-      console.error(`   HTTP статус: ${error.response.status}`);
-    }
-    throw error;
-  }
-}
-
-// ==================== HUGGING FACE ====================
-
-async function recognizeWithHuggingFace(imageBuffer, imageUrl) {
-  try {
-    console.log(`🤖 Использование Hugging Face для распознавания...`);
-    
-    // Используем SDK как основной способ (самый надежный)
-    let result;
-    
-    try {
-      console.log(`🔄 Использование Hugging Face SDK...`);
-      
-      // Конвертируем изображение в base64 для SDK
-      const base64Image = imageBuffer.toString('base64');
-      const dataUrl = `data:image/jpeg;base64,${base64Image}`;
-      
-      // Пробуем разные модели через SDK
-      // Убираем дубликаты и модели, которые могут быть недоступны
-      const modelsToTry = [...new Set([FOOD_MODEL, ...ALTERNATIVE_MODELS])].filter(m => 
-        m !== 'nateraw/food-image-classification'  // Эта модель недоступна
-      );
-      
-      for (const model of modelsToTry) {
-        try {
-          console.log(`📤 Попытка с моделью через SDK: ${model}`);
-          
-          result = await hf.imageClassification({
-            model: model,
-            data: dataUrl
-          });
-          
-          if (result && Array.isArray(result) && result.length > 0) {
-            console.log(`✅ Модель ${model} сработала через SDK`);
-            break;
-          }
-        } catch (modelError) {
-          console.log(`⚠️ Модель ${model} не работает через SDK: ${modelError.message}`);
-          continue;
-        }
-      }
-      
-      // Если SDK не сработал, пробуем прямой HTTP запрос к Inference API
-      if (!result || !Array.isArray(result) || result.length === 0) {
-        console.log(`🔄 SDK не сработал, пробуем прямой HTTP запрос...`);
-        
-        const headers = {
-          'Content-Type': 'image/jpeg',  // Используем правильный Content-Type для изображений
-          'Accept': 'application/json'
-        };
-
-        if (HUGGINGFACE_TOKEN) {
-          headers['Authorization'] = `Bearer ${HUGGINGFACE_TOKEN}`;
-        }
-
-        // Пробуем Inference API endpoint
-        for (const model of modelsToTry) {
-          try {
-            console.log(`📤 Попытка HTTP запрос к модели: ${model}`);
-            const apiUrl = `https://api-inference.huggingface.co/models/${model}`;
-            
-            const response = await axios.post(apiUrl, imageBuffer, {
-              headers: headers,
-              timeout: 60000,
-              responseType: 'json',
-              validateStatus: (status) => (status >= 200 && status < 300) || status === 503
-            });
-
-            if (response.status === 503) {
-              const waitTime = response.data?.estimated_time 
-                ? Math.ceil(response.data.estimated_time) * 1000 
-                : 20000;
-              console.log(`⏳ Модель загружается, ждем ${waitTime/1000} секунд...`);
-              await new Promise(resolve => setTimeout(resolve, waitTime));
-              
-              const retryResponse = await axios.post(apiUrl, imageBuffer, {
-                headers: headers,
-                timeout: 60000,
-                responseType: 'json',
-                validateStatus: (status) => status >= 200 && status < 300
-              });
-              
-              if (retryResponse.data && Array.isArray(retryResponse.data)) {
-                result = retryResponse.data;
-                break;
-              }
-            } else if (response.data && Array.isArray(response.data)) {
-              result = response.data;
-              break;
-            }
-          } catch (httpError) {
-            console.log(`⚠️ HTTP запрос к ${model} не работает: ${httpError.message}`);
-            continue;
-          }
-        }
-      }
-    } catch (sdkError) {
-      console.error(`❌ Hugging Face SDK не сработал: ${sdkError.message}`);
-      throw sdkError;
-    }
-
-    if (!result || !Array.isArray(result) || result.length === 0) {
-      console.error(`❌ Hugging Face не вернул результатов. Попробованы модели: ${[FOOD_MODEL, ...ALTERNATIVE_MODELS].join(', ')}`);
-      throw new Error('Hugging Face не вернул результатов. Возможно, модели недоступны или требуется токен с правильными правами.');
-    }
-
-    // Сортируем по уверенности и берем топ результаты
-    const topResults = result
-      .sort((a, b) => (b.score || 0) - (a.score || 0))
-      .slice(0, 3);
-
-    if (!topResults[0] || !topResults[0].label) {
-      throw new Error('Не удалось определить блюдо из результатов Hugging Face');
-    }
-
-    console.log(`✅ Hugging Face распознал: ${topResults[0].label} (уверенность: ${Math.round((topResults[0].score || 0) * 100)}%)`);
-
-    return {
-      dishName: topResults[0].label,
-      confidence: topResults[0].score || 0.7,
-      provider: 'Hugging Face',
-      alternatives: topResults.slice(1).map(r => ({
-        name: r.label,
-        confidence: r.score || 0.5
-      }))
-    };
-  } catch (error) {
-    console.error(`❌ Ошибка Hugging Face: ${error.message}`);
-    if (error.response?.status === 404) {
-      console.error(`💡 Ошибка 404: Модель не найдена или недоступна`);
-      console.error(`   Проверьте:`);
-      console.error(`   1. Правильность токена HUGGINGFACE_API_TOKEN`);
-      console.error(`   2. Токен должен иметь право "Make calls to Inference Providers"`);
-      console.error(`   3. Модель может быть недоступна - попробуйте другую модель`);
-      console.error(`\n   Рекомендуется:`);
-      console.error(`   - Использовать модель google/vit-base-patch16-224 (работает стабильно)`);
-      console.error(`   - Или настроить Google Vision API как альтернативу`);
-    }
-    throw error;
-  }
-}
-
 // ==================== ОСНОВНАЯ ФУНКЦИЯ РАСПОЗНАВАНИЯ ====================
 
 async function recognizeFood(imageUrl) {
   const imageBuffer = await loadImage(imageUrl);
-  
-  const providers = [];
-  
-  // Добавляем все доступные провайдеры
-  if (openai) {
-    providers.push({ name: 'OpenAI', fn: recognizeWithOpenAI });
-  }
-  if (YANDEX_VISION_API_KEY && YANDEX_VISION_FOLDER_ID) {
-    providers.push({ name: 'Yandex Vision', fn: recognizeWithYandexVision });
-  }
-  if (GOOGLE_VISION_API_KEY) {
-    providers.push({ name: 'Google Vision', fn: recognizeWithGoogleVision });
-  }
-  providers.push({ name: 'Hugging Face', fn: recognizeWithHuggingFace });
-
-  // Переставляем основной провайдер в начало
-  const primaryProviderIndex = providers.findIndex(p => {
-    if (AI_PROVIDER === 'openai') return p.name === 'OpenAI';
-    if (AI_PROVIDER === 'yandex') return p.name === 'Yandex Vision';
-    if (AI_PROVIDER === 'google') return p.name === 'Google Vision';
-    if (AI_PROVIDER === 'huggingface') return p.name === 'Hugging Face';
-    return false;
-  });
-
-  if (primaryProviderIndex > 0) {
-    const primary = providers.splice(primaryProviderIndex, 1)[0];
-    providers.unshift(primary);
-  }
-
-  console.log(`🔄 Порядок провайдеров: ${providers.map(p => p.name).join(' → ')}`);
-
-  // Пробуем провайдеры по очереди
-  let lastError;
-  for (const provider of providers) {
-    try {
-      console.log(`\n🔍 Попытка распознавания через ${provider.name}...`);
-      const result = await provider.fn(imageBuffer, imageUrl);
-      console.log(`✅ Успешно распознано через ${provider.name}: ${result.dishName}`);
-      return result;
-    } catch (error) {
-      console.error(`❌ ${provider.name} не сработал: ${error.message}`);
-      lastError = error;
-      continue; // Пробуем следующий провайдер
-    }
-  }
-
-  // Если все провайдеры не сработали
-  throw new Error(`Все провайдеры не сработали. Последняя ошибка: ${lastError?.message || 'неизвестная ошибка'}`);
+  return await recognizeWithClarifai(imageBuffer, imageUrl);
 }
 
 // ==================== ПОЛУЧЕНИЕ КАЛОРИЙ ====================
@@ -810,17 +326,12 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     service: 'food-recognition-service',
-    provider: AI_PROVIDER,
-    providers: {
-      openai: !!openai,
-      yandex: !!(YANDEX_VISION_API_KEY && YANDEX_VISION_FOLDER_ID),
-      google: !!GOOGLE_VISION_API_KEY,
-      huggingface: !!HUGGINGFACE_TOKEN
-    }
+    provider: 'clarifai',
+    clarifai: !!CLARIFAI_API_KEY
   });
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 Food Recognition Service запущен на порту ${PORT}`);
-  console.log(`📋 Используется провайдер: ${AI_PROVIDER}`);
+  console.log(`📋 Используется провайдер: Clarifai`);
 });

@@ -230,42 +230,185 @@ async function recognizeFood(imageUrl) {
   return await recognizeWithClarifai(imageBuffer, imageUrl);
 }
 
-// ==================== ПОЛУЧЕНИЕ КАЛОРИЙ ====================
+// ==================== ОБРАТНЫЙ ПЕРЕВОД (РУССКИЙ -> АНГЛИЙСКИЙ) ====================
 
-async function getCalories(dishName) {
+function translateToEnglish(russianName) {
+  const translations = {
+    'яйцо': 'egg',
+    'яйца': 'egg',
+    'пицца': 'pizza',
+    'бургер': 'burger',
+    'паста': 'pasta',
+    'макароны': 'macaroni',
+    'салат': 'salad',
+    'суп': 'soup',
+    'рис': 'rice',
+    'курица': 'chicken',
+    'рыба': 'fish',
+    'хлеб': 'bread',
+    'торт': 'cake',
+    'суши': 'sushi',
+    'мясо': 'meat',
+    'сыр': 'cheese',
+    'молоко': 'milk',
+    'яблоко': 'apple',
+    'банан': 'banana',
+    'апельсин': 'orange',
+    'кофе': 'coffee',
+    'чай': 'tea',
+    'гриб': 'mushroom',
+    'колбаса': 'sausage',
+    'говядина': 'beef',
+    'свинина': 'pork'
+  };
+
+  const lower = russianName.toLowerCase();
+  
+  // Точное совпадение
+  if (translations[lower]) {
+    return translations[lower];
+  }
+  
+  // Частичное совпадение
+  for (const [ru, en] of Object.entries(translations)) {
+    if (lower.includes(ru)) {
+      return en;
+    }
+  }
+  
+  return russianName; // Возвращаем оригинал, если нет перевода
+}
+
+// ==================== ПОЛУЧЕНИЕ КАЛОРИЙ ИЗ OPEN FOOD FACTS ====================
+
+async function getCaloriesFromOpenFoodFacts(dishName) {
   try {
-    // Пробуем найти продукт в базе Open Food Facts
-    const searchUrl = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(dishName)}&search_simple=1&action=process&json=1&page_size=5`;
-
-    const response = await axios.get(searchUrl, {
-      timeout: 20000, // Увеличено с 10000 до 20000ms для избежания timeout
+    // Пробуем поиск на русском
+    let searchUrl = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(dishName)}&search_simple=1&action=process&json=1&page_size=5`;
+    
+    let response = await axios.get(searchUrl, {
+      timeout: 15000,
       validateStatus: (status) => status === 200
     });
 
-    if (response.data && response.data.products && response.data.products.length > 0) {
-      const product = response.data.products[0];
+    let products = response.data?.products || [];
+    
+    // Если не нашли или калории = 0, пробуем поиск на английском
+    if (products.length === 0 || !products.some(p => {
+      const nutriments = p.nutriments || {};
+      return (nutriments['energy-kcal_100g'] || nutriments['energy-kcal'] || 0) > 0;
+    })) {
+      const englishName = translateToEnglish(dishName);
+      if (englishName !== dishName) {
+        console.log(`🔄 Пробуем поиск на английском: "${englishName}"`);
+        searchUrl = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(englishName)}&search_simple=1&action=process&json=1&page_size=5`;
+        response = await axios.get(searchUrl, {
+          timeout: 15000,
+          validateStatus: (status) => status === 200
+        });
+        products = response.data?.products || [];
+      }
+    }
+
+    // Ищем продукт с валидными данными о калориях
+    for (const product of products) {
       const nutriments = product.nutriments || {};
-
-      return {
-        calories: Math.round(nutriments['energy-kcal_100g'] || nutriments['energy-kcal'] || 0),
-        protein: Math.round((nutriments['proteins_100g'] || nutriments.proteins || 0) * 10) / 10,
-        carbs: Math.round((nutriments['carbohydrates_100g'] || nutriments.carbohydrates || 0) * 10) / 10,
-        fats: Math.round((nutriments['fat_100g'] || nutriments.fat || 0) * 10) / 10,
-        source: 'Open Food Facts',
-        productName: product.product_name || dishName
-      };
+      const calories = Math.round(nutriments['energy-kcal_100g'] || nutriments['energy-kcal'] || 0);
+      
+      if (calories > 0) {
+        return {
+          calories: calories,
+          protein: Math.round((nutriments['proteins_100g'] || nutriments.proteins || 0) * 10) / 10,
+          carbs: Math.round((nutriments['carbohydrates_100g'] || nutriments.carbohydrates || 0) * 10) / 10,
+          fats: Math.round((nutriments['fat_100g'] || nutriments.fat || 0) * 10) / 10,
+          source: 'Open Food Facts',
+          productName: product.product_name || dishName
+        };
+      }
     }
 
-    return getEstimatedCalories(dishName);
+    return null;
   } catch (error) {
-    // Улучшенная обработка ошибок - не логируем timeout как критическую ошибку
-    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
-      console.warn(`⚠️ Timeout при получении калорий для "${dishName}", используем примерные значения`);
-    } else {
-      console.error('❌ Ошибка получения калорий:', error.message);
+    if (error.code !== 'ECONNABORTED' && !error.message.includes('timeout')) {
+      console.warn(`⚠️ Ошибка Open Food Facts для "${dishName}": ${error.message}`);
     }
-    return getEstimatedCalories(dishName);
+    return null;
   }
+}
+
+// ==================== ПОЛУЧЕНИЕ КАЛОРИЙ ИЗ USDA FOODDATA CENTRAL ====================
+
+async function getCaloriesFromUSDA(dishName) {
+  try {
+    // USDA API требует API ключ, но можно использовать без ключа с ограничениями
+    // Пробуем поиск на английском
+    const englishName = translateToEnglish(dishName);
+    const searchUrl = `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(englishName)}&pageSize=5&api_key=DEMO_KEY`;
+    
+    const response = await axios.get(searchUrl, {
+      timeout: 15000,
+      validateStatus: (status) => status === 200
+    });
+
+    if (response.data?.foods && response.data.foods.length > 0) {
+      const food = response.data.foods[0];
+      const nutrients = food.foodNutrients || [];
+      
+      // Извлекаем данные о питательных веществах
+      const getNutrient = (nutrientId) => {
+        const nutrient = nutrients.find(n => n.nutrientId === nutrientId || n.nutrient?.id === nutrientId);
+        return nutrient?.value || 0;
+      };
+
+      // USDA использует ID: 1008 (энергия в ккал), 1003 (белки), 1005 (углеводы), 1004 (жиры)
+      const calories = Math.round(getNutrient(1008) || getNutrient(208) || 0);
+      
+      if (calories > 0) {
+        // Конвертируем из граммов в граммы (уже в правильных единицах)
+        const protein = Math.round((getNutrient(1003) || getNutrient(203) || 0) * 10) / 10;
+        const carbs = Math.round((getNutrient(1005) || getNutrient(205) || 0) * 10) / 10;
+        const fats = Math.round((getNutrient(1004) || getNutrient(204) || 0) * 10) / 10;
+
+        return {
+          calories: calories,
+          protein: protein,
+          carbs: carbs,
+          fats: fats,
+          source: 'USDA FoodData Central',
+          productName: food.description || dishName
+        };
+      }
+    }
+
+    return null;
+  } catch (error) {
+    // USDA API может требовать ключ, игнорируем ошибки
+    return null;
+  }
+}
+
+// ==================== ПОЛУЧЕНИЕ КАЛОРИЙ ====================
+
+async function getCalories(dishName) {
+  // Пробуем несколько источников по очереди
+  
+  // 1. Open Food Facts
+  let result = await getCaloriesFromOpenFoodFacts(dishName);
+  if (result && result.calories > 0) {
+    console.log(`✅ Калории получены из Open Food Facts: ${result.calories} ккал`);
+    return result;
+  }
+
+  // 2. USDA FoodData Central
+  result = await getCaloriesFromUSDA(dishName);
+  if (result && result.calories > 0) {
+    console.log(`✅ Калории получены из USDA: ${result.calories} ккал`);
+    return result;
+  }
+
+  // 3. Примерные значения из базы
+  console.log(`⚠️ Не найдено в внешних источниках, используем примерные значения`);
+  return getEstimatedCalories(dishName);
 }
 
 function getEstimatedCalories(dishName) {
@@ -303,7 +446,32 @@ function getEstimatedCalories(dishName) {
     'мясо': { calories: 250, protein: 26, carbs: 0, fats: 15 },
     'meat': { calories: 250, protein: 26, carbs: 0, fats: 15 },
     'сыр': { calories: 363, protein: 25, carbs: 0, fats: 30 },
-    'cheese': { calories: 363, protein: 25, carbs: 0, fats: 30 }
+    'cheese': { calories: 363, protein: 25, carbs: 0, fats: 30 },
+    // Яйца
+    'яйцо': { calories: 155, protein: 13, carbs: 1.1, fats: 11 },
+    'яйца': { calories: 155, protein: 13, carbs: 1.1, fats: 11 },
+    'egg': { calories: 155, protein: 13, carbs: 1.1, fats: 11 },
+    'eggs': { calories: 155, protein: 13, carbs: 1.1, fats: 11 },
+    // Молочные продукты
+    'молоко': { calories: 42, protein: 3.2, carbs: 4.7, fats: 1 },
+    'milk': { calories: 42, protein: 3.2, carbs: 4.7, fats: 1 },
+    // Фрукты
+    'яблоко': { calories: 52, protein: 0.3, carbs: 14, fats: 0.2 },
+    'apple': { calories: 52, protein: 0.3, carbs: 14, fats: 0.2 },
+    'банан': { calories: 89, protein: 1.1, carbs: 23, fats: 0.3 },
+    'banana': { calories: 89, protein: 1.1, carbs: 23, fats: 0.3 },
+    'апельсин': { calories: 47, protein: 0.9, carbs: 12, fats: 0.1 },
+    'orange': { calories: 47, protein: 0.9, carbs: 12, fats: 0.1 },
+    // Напитки
+    'кофе': { calories: 2, protein: 0.1, carbs: 0, fats: 0 },
+    'coffee': { calories: 2, protein: 0.1, carbs: 0, fats: 0 },
+    'чай': { calories: 2, protein: 0, carbs: 0.3, fats: 0 },
+    'tea': { calories: 2, protein: 0, carbs: 0.3, fats: 0 },
+    // Другое
+    'гриб': { calories: 22, protein: 3.1, carbs: 3.3, fats: 0.3 },
+    'mushroom': { calories: 22, protein: 3.1, carbs: 3.3, fats: 0.3 },
+    'колбаса': { calories: 301, protein: 13, carbs: 1.5, fats: 27 },
+    'sausage': { calories: 301, protein: 13, carbs: 1.5, fats: 27 }
   };
 
   for (const [key, value] of Object.entries(calorieDatabase)) {

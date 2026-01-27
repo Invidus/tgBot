@@ -92,6 +92,7 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
     // 2. Эпитеты (вкусное, аппетитное и т.д.)
     // 3. Описания времени приема пищи (завтрак, обед, ужин)
     // 4. Общие термины (еда, блюдо, кухня)
+    // 5. Абстрактные понятия (питание, традиция, культура и т.д.)
     const excludeTerms = [
       // Люди и объекты
       'no person', 'person', 'people', 'human', 'man', 'woman', 'child',
@@ -103,26 +104,39 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
       // Общие термины
       'food', 'dish', 'cuisine', 'cooking', 'meal', 'dining', 'restaurant',
       'kitchen', 'serving', 'plate', 'bowl', 'table', 'indoor', 'outdoor',
+      // Абстрактные понятия (не относятся к конкретным блюдам/компонентам)
+      'nutrition', 'traditional', 'culture', 'heritage', 'custom', 'style',
+      'method', 'technique', 'preparation', 'presentation', 'garnish',
+      'decoration', 'garnishing', 'arrangement', 'display', 'layout',
       // Другие нерелевантные
-      'refreshment', 'homemade', 'slice', 'piece', 'portion'
+      'refreshment', 'homemade', 'slice', 'piece', 'portion', 'serving size',
+      'portion size', 'helping', 'course', 'appetizer', 'main course', 'dessert course'
     ];
     
     // Фильтруем нерелевантные термины
     const filteredConcepts = concepts.filter(c => {
       const name = (c.name || '').toLowerCase().trim();
       
+      // Список абстрактных понятий, которые всегда исключаем
+      const abstractTerms = ['nutrition', 'traditional', 'culture', 'heritage', 'custom', 'style',
+        'method', 'technique', 'preparation', 'presentation', 'garnish', 'decoration',
+        'arrangement', 'display', 'layout'];
+      
+      // Список общих терминов, которые всегда исключаем
+      const generalTerms = ['food', 'dish', 'meal', 'cuisine', 'cooking', 'dining'];
+      
       // Проверяем, является ли название одним из исключаемых терминов
-      // Исключаем если:
-      // 1. Точное совпадение
-      // 2. Название начинается или заканчивается исключаемым термином (например, "breakfast" или "tasty food")
-      // 3. Исключаемый термин является отдельным словом в названии (например, "delicious pizza" -> исключаем, но "pizza" останется отдельно)
       return !excludeTerms.some(term => {
         // Точное совпадение
         if (name === term) return true;
         
+        // Абстрактные понятия - исключаем всегда, если они есть в названии
+        if (abstractTerms.includes(term) && name.includes(term)) return true;
+        
+        // Общие термины - исключаем всегда, если они есть в названии
+        if (generalTerms.includes(term) && name.includes(term)) return true;
+        
         // Если название состоит только из исключаемого термина и пробелов/других слов
-        // Например: "tasty", "delicious food", "breakfast meal" - исключаем
-        // Но "pizza" не исключаем, даже если где-то есть слово "food"
         const words = name.split(/\s+/);
         
         // Если все слова в названии - это исключаемые термины, исключаем
@@ -130,10 +144,6 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
         
         // Если название начинается или заканчивается исключаемым термином
         if (name.startsWith(term + ' ') || name.endsWith(' ' + term)) return true;
-        
-        // Если это общие термины (food, dish, meal) - исключаем всегда, если они есть в названии
-        const generalTerms = ['food', 'dish', 'meal', 'cuisine', 'cooking', 'dining'];
-        if (generalTerms.includes(term) && name.includes(term)) return true;
         
         return false;
       });
@@ -182,22 +192,43 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
     const dishName = selectedConcept.name;
     const confidence = selectedConcept.value || 0.7;
 
-    // Переводим на русский, если нужно
-    const dishNameRu = translateToRussian(dishName);
+    // Переводим на русский (с поддержкой API для неизвестных слов)
+    const dishNameRu = await translateToRussianAsync(dishName);
 
     console.log(`✅ Clarifai распознал: ${dishNameRu} (уверенность: ${Math.round(confidence * 100)}%)`);
     
+    // Дополнительная фильтрация альтернатив - исключаем абстрактные понятия
+    const abstractTerms = ['nutrition', 'traditional', 'culture', 'heritage', 'custom', 'style',
+      'method', 'technique', 'preparation', 'presentation', 'garnish', 'decoration',
+      'arrangement', 'display', 'layout', 'food', 'dish', 'meal', 'cuisine'];
+    
+    // Фильтруем и переводим альтернативы асинхронно
+    const alternativeConcepts = topConcepts
+      .filter(c => {
+        // Исключаем уже выбранный вариант
+        if (c === selectedConcept) return false;
+        
+        // Исключаем абстрактные понятия
+        const name = (c.name || '').toLowerCase().trim();
+        return !abstractTerms.some(term => {
+          return name === term || name.includes(term);
+        });
+      })
+      .slice(0, 3);
+    
+    // Переводим все альтернативы параллельно
+    const filteredAlternatives = await Promise.all(
+      alternativeConcepts.map(async (c) => ({
+        name: await translateToRussianAsync(c.name),
+        confidence: c.value || 0.5
+      }))
+    );
+
     return {
       dishName: dishNameRu,
       confidence: confidence,
       provider: 'Clarifai',
-      alternatives: topConcepts
-        .filter(c => c !== selectedConcept) // Исключаем уже выбранный вариант
-        .slice(0, 3)
-        .map(c => ({
-          name: translateToRussian(c.name),
-          confidence: c.value || 0.5
-        }))
+      alternatives: filteredAlternatives
     };
   } catch (error) {
     console.error(`❌ Ошибка Clarifai: ${error.message}`);
@@ -210,6 +241,38 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
     }
     throw error;
   }
+}
+
+// Кэш переводов для избежания повторных запросов
+const translationCache = new Map();
+
+// Асинхронная функция перевода через API (для неизвестных слов)
+async function translateToRussianAPI(englishName) {
+  try {
+    // Проверяем кэш
+    if (translationCache.has(englishName)) {
+      return translationCache.get(englishName);
+    }
+
+    // Используем бесплатный MyMemory Translation API
+    const response = await axios.get(
+      `https://api.mymemory.translated.net/get?q=${encodeURIComponent(englishName)}&langpair=en|ru`,
+      { timeout: 5000 }
+    );
+
+    if (response.data?.responseData?.translatedText) {
+      const translated = response.data.responseData.translatedText;
+      // Сохраняем в кэш
+      translationCache.set(englishName, translated);
+      console.log(`🌐 Переведено через API: "${englishName}" → "${translated}"`);
+      return translated;
+    }
+  } catch (error) {
+    console.warn(`⚠️ Ошибка перевода через API для "${englishName}": ${error.message}`);
+  }
+  
+  // Если перевод не удался, возвращаем оригинал
+  return englishName;
 }
 
 // Улучшенная функция перевода с поддержкой большего количества блюд
@@ -242,30 +305,86 @@ function translateToRussian(englishName) {
     'orange': 'апельсин',
     'vegetable': 'овощ',
     'fruit': 'фрукт',
+    'strawberry': 'клубника',
+    'grape': 'виноград',
+    'cherry': 'вишня',
+    'peach': 'персик',
+    'pear': 'груша',
+    'plum': 'слива',
+    'lemon': 'лимон',
+    'lime': 'лайм',
+    'grapefruit': 'грейпфрут',
+    'carrot': 'морковь',
+    'potato': 'картофель',
+    'cucumber': 'огурец',
+    'pepper': 'перец',
+    'garlic': 'чеснок',
+    'onion': 'лук',
+    'tomato': 'помидор',
+    'lettuce': 'салат',
+    'cabbage': 'капуста',
+    'broccoli': 'брокколи',
+    'cauliflower': 'цветная капуста',
+    'spinach': 'шпинат',
+    'corn': 'кукуруза',
+    'pea': 'горох',
+    'bean': 'фасоль',
     // Молочные продукты
     'cheese': 'сыр',
     'milk': 'молоко',
+    'yogurt': 'йогурт',
+    'butter': 'масло',
+    'cream': 'сливки',
+    'sour cream': 'сметана',
+    'cottage cheese': 'творог',
     // Мясо
     'meat': 'мясо',
     'sausage': 'колбаса',
     'beef': 'говядина',
     'pork': 'свинина',
+    'lamb': 'баранина',
+    'turkey': 'индейка',
+    'duck': 'утка',
+    'bacon': 'бекон',
+    'ham': 'ветчина',
+    // Рыба и морепродукты
+    'fish': 'рыба',
+    'salmon': 'лосось',
+    'tuna': 'тунец',
+    'shrimp': 'креветка',
+    'crab': 'краб',
+    'lobster': 'омар',
+    'seafood': 'морепродукты',
     // Другое
     'egg': 'яйцо',
     'coffee': 'кофе',
     'tea': 'чай',
     'mushroom': 'гриб',
-    // Дополнительные компоненты для комбинирования
-    'bacon': 'бекон',
-    'tomato': 'помидор',
-    'onion': 'лук',
-    'lettuce': 'салат',
+    // Дополнительные компоненты
     'mayonnaise': 'майонез',
     'sauce': 'соус',
     'herb': 'зелень',
-    'vegetable': 'овощ',
-    'pepper': 'перец',
-    'garlic': 'чеснок'
+    'spice': 'специя',
+    'salt': 'соль',
+    'sugar': 'сахар',
+    'honey': 'мед',
+    'oil': 'масло',
+    'vinegar': 'уксус',
+    'mustard': 'горчица',
+    'ketchup': 'кетчуп',
+    // Злаки и крупы
+    'rice': 'рис',
+    'wheat': 'пшеница',
+    'oats': 'овес',
+    'barley': 'ячмень',
+    'buckwheat': 'гречка',
+    'quinoa': 'киноа',
+    // Орехи
+    'nut': 'орех',
+    'almond': 'миндаль',
+    'walnut': 'грецкий орех',
+    'peanut': 'арахис',
+    'hazelnut': 'фундук'
   };
 
   const lower = englishName.toLowerCase();
@@ -290,7 +409,22 @@ function translateToRussian(englishName) {
     return 'паста';
   }
   
-  return englishName; // Возвращаем оригинал, если нет перевода
+  // Если нет перевода в словаре, возвращаем оригинал (будет переведено через API в асинхронной функции)
+  return englishName;
+}
+
+// Асинхронная обертка для перевода с поддержкой API
+async function translateToRussianAsync(englishName) {
+  // Сначала пробуем словарь
+  const dictTranslation = translateToRussian(englishName);
+  
+  // Если перевод из словаря отличается от оригинала, значит нашли перевод
+  if (dictTranslation !== englishName) {
+    return dictTranslation;
+  }
+  
+  // Если нет в словаре, используем API
+  return await translateToRussianAPI(englishName);
 }
 
 // ==================== ОСНОВНАЯ ФУНКЦИЯ РАСПОЗНАВАНИЯ ====================

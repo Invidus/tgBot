@@ -56,9 +56,10 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
     // Конвертируем изображение в base64
     const base64Image = imageBuffer.toString('base64');
     
-    // Используем публичную модель Clarifai для распознавания еды
-    // food-item-recognition - распознает более 1000 видов еды
-    const apiUrl = 'https://api.clarifai.com/v2/users/clarifai/apps/main/models/food-item-recognition/outputs';
+    // Используем публичную модель Clarifai для распознавания
+    // general-image-recognition - более точная модель, лучше распознает блюда целиком
+    // food-item-recognition - распознает отдельные компоненты (менее точно для готовых блюд)
+    const apiUrl = 'https://api.clarifai.com/v2/users/clarifai/apps/main/models/general-image-recognition/outputs';
     
     const requestBody = {
       inputs: [
@@ -86,12 +87,13 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
 
     const concepts = response.data.outputs[0].data.concepts;
     
-    // Фильтруем слишком общие понятия, которые не являются конкретными блюдами
-    const generalTerms = ['food', 'dish', 'meal', 'cuisine', 'cooking', 'recipe', 'ingredient'];
+    // Исключаем только явно нерелевантные термины (не связанные с едой)
+    const excludeTerms = ['no person', 'person', 'people'];
+    
+    // Фильтруем нерелевантные термины
     const filteredConcepts = concepts.filter(c => {
       const name = (c.name || '').toLowerCase();
-      // Исключаем слишком общие термины, если есть более конкретные варианты
-      return !generalTerms.some(term => name === term || name.includes(term + ' '));
+      return !excludeTerms.some(term => name === term);
     });
     
     // Используем отфильтрованные результаты, если они есть, иначе оригинальные
@@ -100,32 +102,39 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
     // Сортируем по уверенности и берем топ результаты
     const topConcepts = conceptsToUse
       .sort((a, b) => (b.value || 0) - (a.value || 0))
-      .slice(0, 10); // Берем больше для комбинирования
+      .slice(0, 5);
 
     if (!topConcepts[0] || !topConcepts[0].name) {
       throw new Error('Не удалось определить блюдо через Clarifai API');
     }
 
-    // Комбинируем компоненты в название блюда
-    const combinedDish = combineComponentsIntoDish(topConcepts);
+    // Выбираем результат с наивысшей уверенностью
+    let selectedConcept = topConcepts[0];
+    const topConfidence = topConcepts[0].value || 0;
     
-    const dishName = combinedDish.name;
-    const confidence = combinedDish.confidence;
+    // Если уверенность первого результата очень низкая (<40%), ищем более надежный вариант
+    if (topConfidence < 0.4 && topConcepts.length > 1) {
+      const betterMatch = topConcepts.find(c => (c.value || 0) >= 0.4);
+      if (betterMatch) {
+        selectedConcept = betterMatch;
+        console.log(`🔄 Выбран более надежный вариант: ${betterMatch.name} (уверенность: ${Math.round(betterMatch.value * 100)}%) вместо ${topConcepts[0].name} (${Math.round(topConfidence * 100)}%)`);
+      }
+    }
+
+    const dishName = selectedConcept.name;
+    const confidence = selectedConcept.value || 0.7;
 
     // Переводим на русский, если нужно
     const dishNameRu = translateToRussian(dishName);
 
     console.log(`✅ Clarifai распознал: ${dishNameRu} (уверенность: ${Math.round(confidence * 100)}%)`);
-    if (combinedDish.components.length > 1) {
-      console.log(`   Компоненты: ${combinedDish.components.map(c => `${c.name} (${Math.round(c.confidence * 100)}%)`).join(', ')}`);
-    }
     
     return {
       dishName: dishNameRu,
       confidence: confidence,
       provider: 'Clarifai',
       alternatives: topConcepts
-        .filter(c => !combinedDish.components.some(comp => comp.name === c.name))
+        .filter(c => c !== selectedConcept) // Исключаем уже выбранный вариант
         .slice(0, 3)
         .map(c => ({
           name: translateToRussian(c.name),
@@ -145,156 +154,6 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
   }
 }
 
-// ==================== КОМБИНИРОВАНИЕ КОМПОНЕНТОВ В БЛЮДО ====================
-
-function combineComponentsIntoDish(concepts) {
-  // Берем компоненты с уверенностью >= 45% (немного снизили порог для лучшего комбинирования)
-  const highConfidenceComponents = concepts
-    .filter(c => (c.value || 0) >= 0.45)
-    .slice(0, 5); // Максимум 5 компонентов для комбинирования
-
-  // Если только один компонент с высокой уверенностью, возвращаем его
-  if (highConfidenceComponents.length <= 1) {
-    const main = concepts[0];
-    return {
-      name: main.name,
-      confidence: main.value || 0.7,
-      components: [main]
-    };
-  }
-
-  // Определяем базовые компоненты (основа блюда) - приоритет выше
-  const baseComponents = [
-    'bread', 'хлеб', 'pasta', 'паста', 'rice', 'рис', 'pizza', 'пицца', 
-    'burger', 'бургер', 'sandwich', 'сэндвич', 'noodle', 'лапша', 
-    'spaghetti', 'спагетти', 'macaroni', 'макароны', 'tortilla', 'тортилья'
-  ];
-  
-  // Компоненты-добавки (не являются основой)
-  const toppingComponents = [
-    'meat', 'мясо', 'cheese', 'сыр', 'bacon', 'бекон', 'tomato', 'помидор',
-    'onion', 'лук', 'lettuce', 'салат', 'sauce', 'соус', 'herb', 'зелень',
-    'pepper', 'перец', 'garlic', 'чеснок', 'chicken', 'курица', 'fish', 'рыба'
-  ];
-  
-  // Ищем базовый компонент (приоритет базовым)
-  let baseComponent = null;
-  let otherComponents = [];
-  
-  // Сначала ищем базовый компонент
-  for (const comp of highConfidenceComponents) {
-    const name = comp.name.toLowerCase();
-    const isBase = baseComponents.some(base => name.includes(base));
-    
-    if (isBase && !baseComponent) {
-      baseComponent = comp;
-    }
-  }
-  
-  // Если нашли базовый, остальные - добавки
-  if (baseComponent) {
-    otherComponents = highConfidenceComponents.filter(c => c !== baseComponent);
-  } else {
-    // Если нет базового, ищем компонент, который НЕ является добавкой
-    for (const comp of highConfidenceComponents) {
-      const name = comp.name.toLowerCase();
-      const isTopping = toppingComponents.some(topping => name.includes(topping));
-      
-      if (!isTopping && !baseComponent) {
-        baseComponent = comp;
-      }
-    }
-    
-    // Если все компоненты - добавки, берем первый как основной
-    if (!baseComponent) {
-      baseComponent = highConfidenceComponents[0];
-      otherComponents = highConfidenceComponents.slice(1);
-    } else {
-      otherComponents = highConfidenceComponents.filter(c => c !== baseComponent);
-    }
-  }
-
-  // Формируем название блюда
-  let dishName;
-  let confidence = baseComponent.value || 0.7;
-
-  if (otherComponents.length === 0) {
-    // Только один компонент
-    dishName = baseComponent.name;
-  } else if (otherComponents.length === 1) {
-    // Базовый компонент + один дополнительный
-    const other = translateToRussian(otherComponents[0].name);
-    const base = translateToRussian(baseComponent.name);
-    
-    // Специальные случаи
-    if (base === 'хлеб' && (other.includes('мясо') || other.includes('meat'))) {
-      dishName = 'хлеб с мясом';
-    } else if (base === 'хлеб' && (other.includes('сыр') || other.includes('cheese'))) {
-      dishName = 'хлеб с сыром';
-    } else if (base === 'паста' && (other.includes('мясо') || other.includes('meat'))) {
-      dishName = 'паста с мясом';
-    } else if (base === 'рис' && (other.includes('курица') || other.includes('chicken'))) {
-      dishName = 'рис с курицей';
-    } else {
-      dishName = `${base} с ${other}`;
-    }
-    confidence = Math.max(baseComponent.value || 0.7, otherComponents[0].value || 0.5);
-  } else {
-    // Базовый компонент + несколько дополнительных
-    const base = translateToRussian(baseComponent.name);
-    const others = otherComponents
-      .slice(0, 2) // Максимум 2 дополнительных компонента
-      .map(c => translateToRussian(c.name))
-      .join(' и ');
-    
-    // Специальные случаи для хлеба с несколькими компонентами (брускетта, крокстини)
-    if (base === 'хлеб') {
-      const othersLower = others.toLowerCase();
-      const hasMeat = othersLower.includes('мясо') || othersLower.includes('meat') || othersLower.includes('bacon') || othersLower.includes('бекон');
-      const hasCheese = othersLower.includes('сыр') || othersLower.includes('cheese');
-      const hasTomato = othersLower.includes('помидор') || othersLower.includes('tomato');
-      
-      if (hasMeat && hasCheese) {
-        dishName = 'брускетта с мясом и сыром';
-      } else if (hasMeat && hasTomato) {
-        dishName = 'брускетта с мясом';
-      } else if (hasMeat) {
-        dishName = 'хлеб с мясом';
-      } else if (hasCheese) {
-        dishName = 'хлеб с сыром';
-      } else {
-        dishName = `хлеб с ${others}`;
-      }
-    } else if (base === 'паста' || base === 'макароны') {
-      const othersLower = others.toLowerCase();
-      if (othersLower.includes('мясо') || othersLower.includes('meat')) {
-        dishName = 'паста с мясом';
-      } else {
-        dishName = `${base} с ${others}`;
-      }
-    } else if (base === 'рис') {
-      const othersLower = others.toLowerCase();
-      if (othersLower.includes('курица') || othersLower.includes('chicken')) {
-        dishName = 'рис с курицей';
-      } else {
-        dishName = `${base} с ${others}`;
-      }
-    } else {
-      dishName = `${base} с ${others}`;
-    }
-    
-    // Усредняем уверенность всех компонентов
-    const allConfidences = [baseComponent.value || 0.7, ...otherComponents.map(c => c.value || 0.5)];
-    confidence = allConfidences.reduce((a, b) => a + b, 0) / allConfidences.length;
-  }
-
-  return {
-    name: dishName,
-    confidence: confidence,
-    components: [baseComponent, ...otherComponents]
-  };
-}
-
 // Улучшенная функция перевода с поддержкой большего количества блюд
 function translateToRussian(englishName) {
   const translations = {
@@ -312,6 +171,16 @@ function translateToRussian(englishName) {
     'fish': 'рыба',
     'bread': 'хлеб',
     'cake': 'торт',
+    'pastry': 'пирожное',
+    'pie': 'пирог',
+    'dessert': 'десерт',
+    'sweet': 'сладкое',
+    'tasty': 'вкусное',
+    'delicious': 'вкусное',
+    'refreshment': 'закуска',
+    'bakery': 'выпечка',
+    'slice': 'ломтик',
+    'homemade': 'домашнее',
     'sandwich': 'сэндвич',
     'sushi': 'суши',
     'steak': 'стейк',
@@ -348,11 +217,7 @@ function translateToRussian(englishName) {
     'herb': 'зелень',
     'vegetable': 'овощ',
     'pepper': 'перец',
-    'garlic': 'чеснок',
-    // Блюда
-    'bruschetta': 'брускетта',
-    'crostini': 'крокстини',
-    'toast': 'тост'
+    'garlic': 'чеснок'
   };
 
   const lower = englishName.toLowerCase();
@@ -583,19 +448,6 @@ function getEstimatedCalories(dishName) {
     'macaroni': { calories: 131, protein: 5, carbs: 25, fats: 1 },
     'макароны с мясом': { calories: 180, protein: 10, carbs: 25, fats: 5 },
     'pasta with meat': { calories: 180, protein: 10, carbs: 25, fats: 5 },
-    // Комбинированные блюда
-    'хлеб с мясом': { calories: 280, protein: 15, carbs: 30, fats: 12 },
-    'bread with meat': { calories: 280, protein: 15, carbs: 30, fats: 12 },
-    'хлеб с сыром': { calories: 320, protein: 14, carbs: 30, fats: 16 },
-    'bread with cheese': { calories: 320, protein: 14, carbs: 30, fats: 16 },
-    'хлеб с мясом и сыром': { calories: 350, protein: 18, carbs: 30, fats: 18 },
-    'bread with meat and cheese': { calories: 350, protein: 18, carbs: 30, fats: 18 },
-    'брускетта с мясом': { calories: 300, protein: 16, carbs: 28, fats: 14 },
-    'bruschetta with meat': { calories: 300, protein: 16, carbs: 28, fats: 14 },
-    'брускетта с мясом и сыром': { calories: 380, protein: 20, carbs: 28, fats: 20 },
-    'bruschetta with meat and cheese': { calories: 380, protein: 20, carbs: 28, fats: 20 },
-    'рис с курицей': { calories: 200, protein: 15, carbs: 25, fats: 5 },
-    'rice with chicken': { calories: 200, protein: 15, carbs: 25, fats: 5 },
     'салат': { calories: 20, protein: 1, carbs: 4, fats: 0 },
     'salad': { calories: 20, protein: 1, carbs: 4, fats: 0 },
     'суп': { calories: 50, protein: 2, carbs: 8, fats: 1 },

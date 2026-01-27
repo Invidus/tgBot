@@ -87,17 +87,75 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
 
     const concepts = response.data.outputs[0].data.concepts;
     
-    // Исключаем только явно нерелевантные термины (не связанные с едой)
-    const excludeTerms = ['no person', 'person', 'people'];
+    // Исключаем нерелевантные термины:
+    // 1. Люди и объекты
+    // 2. Эпитеты (вкусное, аппетитное и т.д.)
+    // 3. Описания времени приема пищи (завтрак, обед, ужин)
+    // 4. Общие термины (еда, блюдо, кухня)
+    const excludeTerms = [
+      // Люди и объекты
+      'no person', 'person', 'people', 'human', 'man', 'woman', 'child',
+      // Эпитеты
+      'tasty', 'delicious', 'appetizing', 'savory', 'sweet', 'yummy', 'scrumptious',
+      'mouthwatering', 'flavorful', 'tempting', 'appealing', 'luscious', 'succulent',
+      // Описания времени приема пищи
+      'breakfast', 'lunch', 'dinner', 'meal', 'snack', 'brunch', 'supper',
+      // Общие термины
+      'food', 'dish', 'cuisine', 'cooking', 'meal', 'dining', 'restaurant',
+      'kitchen', 'serving', 'plate', 'bowl', 'table', 'indoor', 'outdoor',
+      // Другие нерелевантные
+      'refreshment', 'homemade', 'slice', 'piece', 'portion'
+    ];
     
     // Фильтруем нерелевантные термины
     const filteredConcepts = concepts.filter(c => {
-      const name = (c.name || '').toLowerCase();
-      return !excludeTerms.some(term => name === term);
+      const name = (c.name || '').toLowerCase().trim();
+      
+      // Проверяем, является ли название одним из исключаемых терминов
+      // Исключаем если:
+      // 1. Точное совпадение
+      // 2. Название начинается или заканчивается исключаемым термином (например, "breakfast" или "tasty food")
+      // 3. Исключаемый термин является отдельным словом в названии (например, "delicious pizza" -> исключаем, но "pizza" останется отдельно)
+      return !excludeTerms.some(term => {
+        // Точное совпадение
+        if (name === term) return true;
+        
+        // Если название состоит только из исключаемого термина и пробелов/других слов
+        // Например: "tasty", "delicious food", "breakfast meal" - исключаем
+        // Но "pizza" не исключаем, даже если где-то есть слово "food"
+        const words = name.split(/\s+/);
+        
+        // Если все слова в названии - это исключаемые термины, исключаем
+        if (words.every(word => excludeTerms.includes(word))) return true;
+        
+        // Если название начинается или заканчивается исключаемым термином
+        if (name.startsWith(term + ' ') || name.endsWith(' ' + term)) return true;
+        
+        // Если это общие термины (food, dish, meal) - исключаем всегда, если они есть в названии
+        const generalTerms = ['food', 'dish', 'meal', 'cuisine', 'cooking', 'dining'];
+        if (generalTerms.includes(term) && name.includes(term)) return true;
+        
+        return false;
+      });
     });
     
-    // Используем отфильтрованные результаты, если они есть, иначе оригинальные
-    const conceptsToUse = filteredConcepts.length > 0 ? filteredConcepts : concepts;
+    // Используем отфильтрованные результаты, если они есть
+    // Если после фильтрации ничего не осталось, это ошибка - значит все результаты были нерелевантными
+    if (filteredConcepts.length === 0) {
+      console.warn('⚠️ Все результаты были отфильтрованы как нерелевантные. Попробуем использовать оригинальные результаты.');
+      // В крайнем случае используем оригинальные, но это нежелательно
+      const fallbackConcepts = concepts.filter(c => {
+        const name = (c.name || '').toLowerCase();
+        // Минимальная фильтрация - только люди
+        return !['no person', 'person', 'people', 'human'].includes(name);
+      });
+      if (fallbackConcepts.length === 0) {
+        throw new Error('Не удалось определить блюдо через Clarifai API - все результаты нерелевантны');
+      }
+      var conceptsToUse = fallbackConcepts;
+    } else {
+      var conceptsToUse = filteredConcepts;
+    }
     
     // Сортируем по уверенности и берем топ результаты
     const topConcepts = conceptsToUse
@@ -174,20 +232,10 @@ function translateToRussian(englishName) {
     'pastry': 'пирожное',
     'pie': 'пирог',
     'dessert': 'десерт',
-    'sweet': 'сладкое',
-    'tasty': 'вкусное',
-    'delicious': 'вкусное',
-    'refreshment': 'закуска',
-    'bakery': 'выпечка',
-    'slice': 'ломтик',
-    'homemade': 'домашнее',
     'sandwich': 'сэндвич',
     'sushi': 'суши',
     'steak': 'стейк',
     'pasta dish': 'паста',
-    'food': 'еда',
-    'dish': 'блюдо',
-    'meal': 'блюдо',
     // Фрукты и овощи
     'apple': 'яблоко',
     'banana': 'банан',

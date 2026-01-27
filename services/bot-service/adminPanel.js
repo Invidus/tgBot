@@ -74,7 +74,13 @@ export const formatUserInfo = (userInfo) => {
     message += `🤖 ИИ запросов (всего): ${userInfo.aiRequests || 0}\n`;
   }
   if (userInfo.aiRequestsRemaining !== undefined) {
-    message += `📊 ИИ запросов сегодня: ${userInfo.aiRequestsToday || 0}/5 (осталось: ${userInfo.aiRequestsRemaining || 0})\n`;
+    if (userInfo.aiRequestsTotal > 0) {
+      message += `📊 ИИ запросов (добавлено через админ): ${userInfo.aiRequestsTotal}\n`;
+      message += `✅ Осталось: ${userInfo.aiRequestsRemaining || 0}\n`;
+      message += `📅 Запросов сегодня: ${userInfo.aiRequestsToday || 0}/5\n`;
+    } else {
+      message += `📊 ИИ запросов сегодня: ${userInfo.aiRequestsToday || 0}/5 (осталось: ${userInfo.aiRequestsRemaining || 0})\n`;
+    }
   }
   message += `\n`;
 

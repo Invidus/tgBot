@@ -929,9 +929,9 @@ app.get('/users/:chatId/ai-requests/check', async (req, res) => {
     const chatId = parseInt(req.params.chatId);
     const today = new Date().toISOString().split('T')[0];
 
-    // Проверяем подписку из таблицы users
+    // Проверяем подписку и общий счетчик ИИ запросов из таблицы users
     const userResult = await pool.query(
-      'SELECT subscription_end_date FROM users WHERE chat_id = $1',
+      'SELECT subscription_end_date, ai_requests FROM users WHERE chat_id = $1',
       [chatId]
     );
 
@@ -940,6 +940,7 @@ app.get('/users/:chatId/ai-requests/check', async (req, res) => {
     }
 
     const user = userResult.rows[0];
+    const aiRequestsTotal = user.ai_requests || 0;
     let hasSubscription = user.subscription_end_date && new Date(user.subscription_end_date) > new Date();
 
     // Если нет подписки в users, проверяем таблицу subscriptions
@@ -968,7 +969,25 @@ app.get('/users/:chatId/ai-requests/check', async (req, res) => {
       });
     }
 
-    // Проверяем дневной лимит
+    // Если есть общие ИИ запросы (добавленные через админ-панель), разрешаем использование
+    if (aiRequestsTotal > 0) {
+      const historyResult = await pool.query(
+        'SELECT request_count FROM ai_requests_history WHERE chat_id = $1 AND request_date = $2',
+        [chatId, today]
+      );
+      const todayRequests = historyResult.rows[0]?.request_count || 0;
+      
+      return res.json({
+        allowed: true,
+        remaining: aiRequestsTotal, // Используем общий счетчик
+        usedToday: todayRequests,
+        maxDaily: 5,
+        aiRequestsTotal: aiRequestsTotal,
+        usingTotal: true // Флаг, что используем общий счетчик
+      });
+    }
+
+    // Если общих запросов нет, проверяем дневной лимит
     const historyResult = await pool.query(
       'SELECT request_count FROM ai_requests_history WHERE chat_id = $1 AND request_date = $2',
       [chatId, today]
@@ -991,7 +1010,9 @@ app.get('/users/:chatId/ai-requests/check', async (req, res) => {
       allowed: true,
       remaining: maxDailyRequests - todayRequests,
       usedToday: todayRequests,
-      maxDaily: maxDailyRequests
+      maxDaily: maxDailyRequests,
+      aiRequestsTotal: 0,
+      usingTotal: false
     });
   } catch (error) {
     console.error('Ошибка проверки ИИ запросов:', error);
@@ -1005,32 +1026,65 @@ app.post('/users/:chatId/ai-requests/decrement', async (req, res) => {
     const chatId = parseInt(req.params.chatId);
     const today = new Date().toISOString().split('T')[0];
 
-    // Увеличиваем счетчик в истории
-    await pool.query(`
-      INSERT INTO ai_requests_history (chat_id, request_date, request_count)
-      VALUES ($1, $2, 1)
-      ON CONFLICT (chat_id, request_date)
-      DO UPDATE SET request_count = ai_requests_history.request_count + 1
-    `, [chatId, today]);
+    // Получаем текущее количество общих ИИ запросов
+    const userResult = await pool.query(
+      'SELECT ai_requests FROM users WHERE chat_id = $1',
+      [chatId]
+    );
 
-    // Уменьшаем общий счетчик ИИ запросов (если есть)
-    await pool.query(`
-      UPDATE users
-      SET ai_requests = GREATEST(0, ai_requests - 1), updated_at = CURRENT_TIMESTAMP
-      WHERE chat_id = $1
-    `, [chatId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    const aiRequestsTotal = userResult.rows[0].ai_requests || 0;
+    let shouldDecrementTotal = false;
+
+    // Если есть общие запросы, уменьшаем их, иначе только дневной лимит
+    if (aiRequestsTotal > 0) {
+      shouldDecrementTotal = true;
+      // Уменьшаем общий счетчик ИИ запросов
+      await pool.query(`
+        UPDATE users
+        SET ai_requests = GREATEST(0, ai_requests - 1), updated_at = CURRENT_TIMESTAMP
+        WHERE chat_id = $1
+      `, [chatId]);
+    } else {
+      // Если общих запросов нет, увеличиваем счетчик в истории (дневной лимит)
+      await pool.query(`
+        INSERT INTO ai_requests_history (chat_id, request_date, request_count)
+        VALUES ($1, $2, 1)
+        ON CONFLICT (chat_id, request_date)
+        DO UPDATE SET request_count = ai_requests_history.request_count + 1
+      `, [chatId, today]);
+    }
 
     // Получаем обновленную информацию
+    const updatedUserResult = await pool.query(
+      'SELECT ai_requests FROM users WHERE chat_id = $1',
+      [chatId]
+    );
+    const updatedAiRequestsTotal = updatedUserResult.rows[0]?.ai_requests || 0;
+
     const historyResult = await pool.query(
       'SELECT request_count FROM ai_requests_history WHERE chat_id = $1 AND request_date = $2',
       [chatId, today]
     );
     const todayRequests = historyResult.rows[0]?.request_count || 0;
 
+    // Определяем оставшиеся запросы
+    let remaining;
+    if (updatedAiRequestsTotal > 0) {
+      remaining = updatedAiRequestsTotal; // Используем общий счетчик
+    } else {
+      remaining = Math.max(0, 5 - todayRequests); // Используем дневной лимит
+    }
+
     res.json({
       success: true,
-      remaining: Math.max(0, 5 - todayRequests),
-      usedToday: todayRequests
+      remaining: remaining,
+      usedToday: todayRequests,
+      aiRequestsTotal: updatedAiRequestsTotal,
+      usingTotal: updatedAiRequestsTotal > 0
     });
   } catch (error) {
     console.error('Ошибка уменьшения ИИ запросов:', error);
@@ -1144,14 +1198,23 @@ app.get('/users/:chatId/ai-requests/info', async (req, res) => {
 
     const todayRequests = historyResult.rows[0]?.request_count || 0;
     const maxDailyRequests = 5;
-    const remaining = Math.max(0, maxDailyRequests - todayRequests);
+    const aiRequestsTotal = user.ai_requests || 0;
+    
+    // Если есть общие запросы, используем их, иначе дневной лимит
+    let remaining;
+    if (aiRequestsTotal > 0) {
+      remaining = aiRequestsTotal; // Используем общий счетчик
+    } else {
+      remaining = Math.max(0, maxDailyRequests - todayRequests); // Используем дневной лимит
+    }
 
     res.json({
       hasSubscription,
-      aiRequestsTotal: user.ai_requests || 0,
+      aiRequestsTotal: aiRequestsTotal,
       aiRequestsToday: todayRequests,
       aiRequestsRemaining: remaining,
-      maxDailyRequests
+      maxDailyRequests,
+      usingTotal: aiRequestsTotal > 0 // Флаг, что используем общий счетчик
     });
   } catch (error) {
     console.error('Ошибка получения информации об ИИ запросах:', error);

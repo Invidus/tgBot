@@ -1003,7 +1003,11 @@ bot.action("recognize_food", async (ctx) => {
   message += "• Пищевую ценность\n\n";
 
   if (aiInfo) {
-    message += `📊 ИИ запросов осталось сегодня: ${aiInfo.aiRequestsRemaining}/5\n\n`;
+    if (aiInfo.aiRequestsTotal > 0) {
+      message += `📊 ИИ запросов осталось: ${aiInfo.aiRequestsRemaining} (добавлено через админ-панель)\n\n`;
+    } else {
+      message += `📊 ИИ запросов осталось сегодня: ${aiInfo.aiRequestsRemaining}/5\n\n`;
+    }
   }
 
   message += "💡 **Советы для лучшего результата:**\n";
@@ -2728,7 +2732,11 @@ bot.on("photo", async (ctx) => {
     message += `📚 Источник: ${result.source}\n\n`;
 
     if (aiInfo) {
-      message += `📊 ИИ запросов осталось сегодня: ${aiInfo.aiRequestsRemaining}/5`;
+      if (aiInfo.aiRequestsTotal > 0) {
+        message += `📊 ИИ запросов осталось: ${aiInfo.aiRequestsRemaining} (добавлено через админ-панель)`;
+      } else {
+        message += `📊 ИИ запросов осталось сегодня: ${aiInfo.aiRequestsRemaining}/5`;
+      }
     }
 
     // Добавляем альтернативные варианты, если есть
@@ -2953,8 +2961,14 @@ bot.action("subscription_menu", async (ctx) => {
     const aiInfo = await getAiRequestsInfo(chatId);
     if (aiInfo) {
       message += `🤖 **ИИ распознавание блюд:**\n`;
-      message += `📊 Запросов сегодня: ${aiInfo.aiRequestsToday}/5\n`;
-      message += `✅ Осталось: ${aiInfo.aiRequestsRemaining}/5\n\n`;
+      if (aiInfo.aiRequestsTotal > 0) {
+        message += `📊 ИИ запросов (добавлено через админ): ${aiInfo.aiRequestsTotal}\n`;
+        message += `✅ Осталось: ${aiInfo.aiRequestsRemaining}\n`;
+        message += `📅 Запросов сегодня: ${aiInfo.aiRequestsToday}/5\n\n`;
+      } else {
+        message += `📊 Запросов сегодня: ${aiInfo.aiRequestsToday}/5\n`;
+        message += `✅ Осталось: ${aiInfo.aiRequestsRemaining}/5\n\n`;
+      }
       message += `💡 С подпиской вы можете распознать 5 блюд по фото и подсчитать их калорийность и БЖУ\n\n`;
     }
 

@@ -2571,6 +2571,8 @@ bot.action("diary_menu", async (ctx) => {
   }
 
   try {
+    console.log(`📊 Открытие дневника для chatId=${chatId}, diaryServiceUrl=${diaryServiceUrl}`);
+
     // Переносим избранное из database-service в diary-service при первом входе
     try {
       const migrationKey = `user:diary_migrated:${chatId}`;
@@ -2613,24 +2615,94 @@ bot.action("diary_menu", async (ctx) => {
     }
 
     // Получаем профиль пользователя
-    const profileResponse = await axios.get(`${diaryServiceUrl}/profiles/${chatId}`, {
-      timeout: 10000
-    });
+    let profile = null;
+    let hasProfile = false;
+    try {
+      console.log(`📋 Запрос профиля: ${diaryServiceUrl}/profiles/${chatId}`);
+      const profileResponse = await axios.get(`${diaryServiceUrl}/profiles/${chatId}`, {
+        timeout: 10000,
+        validateStatus: (status) => status < 500 // Разрешаем 403, 404
+      });
 
-    const profile = profileResponse.data.profile;
-    const hasProfile = profile !== null;
+      console.log(`✅ Профиль получен, status: ${profileResponse.status}`);
+
+      if (profileResponse.status === 403) {
+        console.log(`❌ Доступ запрещен для chatId=${chatId}`);
+        throw new Error('Доступ запрещен - требуется подписка');
+      }
+
+      profile = profileResponse.data?.profile || null;
+      hasProfile = profile !== null;
+      console.log(`📊 Профиль существует: ${hasProfile}`);
+    } catch (profileError) {
+      console.error('❌ Ошибка получения профиля:', {
+        message: profileError.message,
+        code: profileError.code,
+        status: profileError.response?.status,
+        response: profileError.response?.data
+      });
+      if (profileError.response?.status === 403) {
+        throw profileError; // Пробрасываем ошибку подписки
+      }
+      // Продолжаем работу без профиля
+    }
 
     // Получаем данные за сегодня
     const today = new Date().toISOString().split('T')[0];
-    const diaryResponse = await axios.get(`${diaryServiceUrl}/diary/${chatId}/entries?date=${today}`, {
-      timeout: 10000
-    });
-    const waterResponse = await axios.get(`${diaryServiceUrl}/diary/${chatId}/water?date=${today}`, {
-      timeout: 10000
-    });
+    let diaryData = { entries: [], totals: { calories: 0, protein: 0, carbs: 0, fats: 0 } };
+    let waterData = { water: { amount_ml: 0 } };
 
-    const diaryData = diaryResponse.data;
-    const waterData = waterResponse.data;
+    try {
+      console.log(`📝 Запрос записей дневника: ${diaryServiceUrl}/diary/${chatId}/entries?date=${today}`);
+      const diaryResponse = await axios.get(`${diaryServiceUrl}/diary/${chatId}/entries?date=${today}`, {
+        timeout: 10000,
+        validateStatus: (status) => status < 500
+      });
+
+      console.log(`✅ Записи дневника получены, status: ${diaryResponse.status}`);
+
+      if (diaryResponse.status === 403) {
+        throw new Error('Доступ запрещен - требуется подписка');
+      }
+
+      diaryData = diaryResponse.data || diaryData;
+    } catch (diaryError) {
+      console.error('❌ Ошибка получения записей дневника:', {
+        message: diaryError.message,
+        code: diaryError.code,
+        status: diaryError.response?.status
+      });
+      if (diaryError.response?.status === 403) {
+        throw diaryError;
+      }
+      // Продолжаем с пустыми данными
+    }
+
+    try {
+      console.log(`💧 Запрос воды: ${diaryServiceUrl}/diary/${chatId}/water?date=${today}`);
+      const waterResponse = await axios.get(`${diaryServiceUrl}/diary/${chatId}/water?date=${today}`, {
+        timeout: 10000,
+        validateStatus: (status) => status < 500
+      });
+
+      console.log(`✅ Вода получена, status: ${waterResponse.status}`);
+
+      if (waterResponse.status === 403) {
+        throw new Error('Доступ запрещен - требуется подписка');
+      }
+
+      waterData = waterResponse.data || waterData;
+    } catch (waterError) {
+      console.error('❌ Ошибка получения воды:', {
+        message: waterError.message,
+        code: waterError.code,
+        status: waterError.response?.status
+      });
+      if (waterError.response?.status === 403) {
+        throw waterError;
+      }
+      // Продолжаем с нулевым количеством воды
+    }
 
     let message = "📊 **Дневник питания**\n\n";
 
@@ -2693,9 +2765,28 @@ bot.action("diary_menu", async (ctx) => {
       reply_markup: keyboard
     });
   } catch (error) {
-    console.error('Ошибка получения данных дневника:', error);
+    console.error('Ошибка получения данных дневника:', {
+      message: error.message,
+      response: error.response?.data,
+      status: error.response?.status,
+      url: error.config?.url,
+      diaryServiceUrl
+    });
+
+    let errorMessage = "❌ Ошибка загрузки дневника.";
+
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      errorMessage += "\n\n⚠️ Сервис дневника временно недоступен. Попробуйте позже.";
+    } else if (error.response?.status === 403) {
+      errorMessage = "❌ Дневник питания доступен только для подписчиков!";
+    } else if (error.message?.includes('Доступ запрещен')) {
+      errorMessage = "❌ Дневник питания доступен только для подписчиков!";
+    } else {
+      errorMessage += "\n\nПопробуйте позже или обратитесь в поддержку.";
+    }
+
     await ctx.reply(
-      "❌ Ошибка загрузки дневника. Попробуйте позже.",
+      errorMessage,
       {
         reply_markup: {
           inline_keyboard: [

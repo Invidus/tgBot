@@ -183,30 +183,43 @@ async function checkSubscription(chatId) {
   try {
     // Проверяем подписку через database-service
     const response = await axios.get(`${config.services.database}/subscriptions/${chatId}`, {
-      timeout: 5000
+      timeout: 5000,
+      validateStatus: (status) => status < 500 // Разрешаем 404
     });
 
-    if (response.data && response.data.subscription) {
+    if (response.status === 200 && response.data && response.data.subscription) {
       const endDate = new Date(response.data.subscription.end_date);
-      return endDate > new Date() && response.data.subscription.is_active;
+      const isActive = endDate > new Date() && response.data.subscription.is_active;
+      if (isActive) {
+        return true;
+      }
     }
 
     // Если нет подписки в subscriptions, проверяем users
     const userResponse = await axios.get(`${config.services.database}/users/chat/${chatId}`, {
-      timeout: 5000
+      timeout: 5000,
+      validateStatus: (status) => status < 500
     });
 
-    if (userResponse.data && userResponse.data.user) {
+    if (userResponse.status === 200 && userResponse.data && userResponse.data.user) {
       const user = userResponse.data.user;
       if (user && user.subscription_end_date) {
         const endDate = new Date(user.subscription_end_date);
-        return endDate > new Date();
+        if (endDate > new Date()) {
+          return true;
+        }
       }
     }
 
     return false;
   } catch (error) {
-    console.error('Ошибка проверки подписки:', error.message);
+    // Если database-service недоступен, логируем, но не блокируем доступ
+    // (можно изменить логику в зависимости от требований)
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      console.error(`⚠️ Database-service недоступен для проверки подписки chatId=${chatId}:`, error.message);
+    } else {
+      console.error(`Ошибка проверки подписки для chatId=${chatId}:`, error.message);
+    }
     return false;
   }
 }

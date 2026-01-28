@@ -2,18 +2,24 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Копируем package.json для установки зависимостей
-COPY services/diary-service/package.json ./
-COPY services/shared ./services/shared
+# Копируем shared конфигурацию
+COPY services/shared ./shared
 
-# Устанавливаем зависимости
+# Копируем package.json и index.js сервиса
+COPY services/diary-service/package.json ./diary-service/
+COPY services/diary-service/index.js ./diary-service/
+
+# Устанавливаем зависимости для shared
+WORKDIR /app/shared
 RUN npm install
 
-# Копируем код сервиса
-COPY services/diary-service/index.js ./
+# Устанавливаем зависимости для diary-service
+WORKDIR /app/diary-service
+RUN npm install
 
 # Открываем порт
 EXPOSE 3005
 
-# Запускаем сервис
+# Запускаем сервис из директории diary-service
+WORKDIR /app/diary-service
 CMD ["npm", "start"]

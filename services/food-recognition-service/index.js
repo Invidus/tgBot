@@ -30,11 +30,11 @@ async function loadImage(imageUrl) {
       maxContentLength: 10 * 1024 * 1024, // 10MB максимум
       validateStatus: (status) => status === 200
     });
-    
+
     if (!imageResponse.data || imageResponse.data.length === 0) {
       throw new Error('Изображение пустое или не загружено');
     }
-    
+
     console.log(`✅ Изображение загружено, размер: ${imageResponse.data.length} байт`);
     return Buffer.from(imageResponse.data);
   } catch (error) {
@@ -52,15 +52,15 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
 
   try {
     console.log(`🤖 Использование Clarifai для распознавания...`);
-    
+
     // Конвертируем изображение в base64
     const base64Image = imageBuffer.toString('base64');
-    
+
     // Используем публичную модель Clarifai для распознавания
     // general-image-recognition - более точная модель, лучше распознает блюда целиком
     // food-item-recognition - распознает отдельные компоненты (менее точно для готовых блюд)
     const apiUrl = 'https://api.clarifai.com/v2/users/clarifai/apps/main/models/general-image-recognition/outputs';
-    
+
     const requestBody = {
       inputs: [
         {
@@ -86,7 +86,7 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
     }
 
     const concepts = response.data.outputs[0].data.concepts;
-    
+
     // Исключаем нерелевантные термины:
     // 1. Люди и объекты
     // 2. Эпитеты (вкусное, аппетитное и т.д.)
@@ -112,43 +112,43 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
       'refreshment', 'homemade', 'slice', 'piece', 'portion', 'serving size',
       'portion size', 'helping', 'course', 'appetizer', 'main course', 'dessert course'
     ];
-    
+
     // Фильтруем нерелевантные термины
     const filteredConcepts = concepts.filter(c => {
       const name = (c.name || '').toLowerCase().trim();
-      
+
       // Список абстрактных понятий, которые всегда исключаем
       const abstractTerms = ['nutrition', 'traditional', 'culture', 'heritage', 'custom', 'style',
         'method', 'technique', 'preparation', 'presentation', 'garnish', 'decoration',
         'arrangement', 'display', 'layout'];
-      
+
       // Список общих терминов, которые всегда исключаем
       const generalTerms = ['food', 'dish', 'meal', 'cuisine', 'cooking', 'dining'];
-      
+
       // Проверяем, является ли название одним из исключаемых терминов
       return !excludeTerms.some(term => {
         // Точное совпадение
         if (name === term) return true;
-        
+
         // Абстрактные понятия - исключаем всегда, если они есть в названии
         if (abstractTerms.includes(term) && name.includes(term)) return true;
-        
+
         // Общие термины - исключаем всегда, если они есть в названии
         if (generalTerms.includes(term) && name.includes(term)) return true;
-        
+
         // Если название состоит только из исключаемого термина и пробелов/других слов
         const words = name.split(/\s+/);
-        
+
         // Если все слова в названии - это исключаемые термины, исключаем
         if (words.every(word => excludeTerms.includes(word))) return true;
-        
+
         // Если название начинается или заканчивается исключаемым термином
         if (name.startsWith(term + ' ') || name.endsWith(' ' + term)) return true;
-        
+
         return false;
       });
     });
-    
+
     // Используем отфильтрованные результаты, если они есть
     // Если после фильтрации ничего не осталось, это ошибка - значит все результаты были нерелевантными
     if (filteredConcepts.length === 0) {
@@ -166,7 +166,7 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
     } else {
       var conceptsToUse = filteredConcepts;
     }
-    
+
     // Сортируем по уверенности и берем топ результаты
     const topConcepts = conceptsToUse
       .sort((a, b) => (b.value || 0) - (a.value || 0))
@@ -179,7 +179,7 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
     // Выбираем результат с наивысшей уверенностью
     let selectedConcept = topConcepts[0];
     const topConfidence = topConcepts[0].value || 0;
-    
+
     // Если уверенность первого результата очень низкая (<40%), ищем более надежный вариант
     if (topConfidence < 0.4 && topConcepts.length > 1) {
       const betterMatch = topConcepts.find(c => (c.value || 0) >= 0.4);
@@ -196,33 +196,123 @@ async function recognizeWithClarifai(imageBuffer, imageUrl) {
     const dishNameRu = await translateToRussianAsync(dishName);
 
     console.log(`✅ Clarifai распознал: ${dishNameRu} (уверенность: ${Math.round(confidence * 100)}%)`);
-    
-    // Дополнительная фильтрация альтернатив - исключаем абстрактные понятия
+
+    // Дополнительная фильтрация альтернатив - исключаем абстрактные понятия, прилагательные, глаголы
     const abstractTerms = ['nutrition', 'traditional', 'culture', 'heritage', 'custom', 'style',
       'method', 'technique', 'preparation', 'presentation', 'garnish', 'decoration',
       'arrangement', 'display', 'layout', 'food', 'dish', 'meal', 'cuisine'];
-    
+
+    // Прилагательные (описания вкусовых качеств и характеристик)
+    const adjectives = [
+      'tasty', 'delicious', 'appetizing', 'savory', 'sweet', 'yummy', 'scrumptious',
+      'mouthwatering', 'flavorful', 'tempting', 'appealing', 'luscious', 'succulent',
+      'juicy', 'fresh', 'crispy', 'tender', 'soft', 'hard', 'hot', 'cold', 'warm',
+      'spicy', 'sour', 'bitter', 'salty', 'bland', 'rich', 'light', 'heavy', 'thick',
+      'thin', 'smooth', 'rough', 'creamy', 'crunchy', 'chewy', 'moist', 'dry'
+    ];
+
+    // Глаголы и действия
+    const verbs = [
+      'grow', 'growing', 'plant', 'planting', 'cook', 'cooking', 'eat', 'eating',
+      'serve', 'serving', 'prepare', 'preparing', 'cut', 'cutting', 'slice', 'slicing',
+      'chop', 'chopping', 'mix', 'mixing', 'stir', 'stirring', 'boil', 'boiling',
+      'fry', 'frying', 'bake', 'baking', 'grill', 'grilling', 'roast', 'roasting'
+    ];
+
+    // Функция для проверки, является ли название существительным (компонентом/блюдом)
+    function isNounOrFoodItem(name) {
+      const lowerName = name.toLowerCase().trim();
+
+      // Проверяем на прилагательные
+      if (adjectives.some(adj => lowerName === adj || lowerName.startsWith(adj + ' ') || lowerName.endsWith(' ' + adj))) {
+        return false;
+      }
+
+      // Проверяем на глаголы
+      if (verbs.some(verb => lowerName === verb || lowerName.startsWith(verb + ' ') || lowerName.endsWith(' ' + verb))) {
+        return false;
+      }
+
+      // Проверяем на абстрактные понятия
+      if (abstractTerms.some(term => lowerName === term || lowerName.includes(term))) {
+        return false;
+      }
+
+      return true;
+    }
+
     // Фильтруем и переводим альтернативы асинхронно
     const alternativeConcepts = topConcepts
       .filter(c => {
         // Исключаем уже выбранный вариант
         if (c === selectedConcept) return false;
-        
-        // Исключаем абстрактные понятия
+
+        // Проверяем, является ли название существительным (компонентом/блюдом)
         const name = (c.name || '').toLowerCase().trim();
-        return !abstractTerms.some(term => {
-          return name === term || name.includes(term);
-        });
+        return isNounOrFoodItem(name);
       })
-      .slice(0, 3);
-    
+      .slice(0, 5); // Берем больше, чтобы после фильтрации осталось достаточно
+
     // Переводим все альтернативы параллельно
-    const filteredAlternatives = await Promise.all(
+    const translatedAlternatives = await Promise.all(
       alternativeConcepts.map(async (c) => ({
         name: await translateToRussianAsync(c.name),
+        originalName: c.name,
         confidence: c.value || 0.5
       }))
     );
+
+    // Дополнительная фильтрация после перевода на русский
+    // Русские прилагательные и глаголы
+    const russianAdjectives = [
+      'вкусный', 'вкусное', 'вкусная', 'вкусные', 'аппетитный', 'аппетитное', 'аппетитная',
+      'сочный', 'сочное', 'сочная', 'сочные', 'свежий', 'свежее', 'свежая', 'свежие',
+      'хрустящий', 'хрустящее', 'хрустящая', 'хрустящие', 'нежный', 'нежное', 'нежная',
+      'мягкий', 'мягкое', 'мягкая', 'мягкие', 'горячий', 'горячее', 'горячая', 'горячие',
+      'холодный', 'холодное', 'холодная', 'холодные', 'теплый', 'теплое', 'теплая', 'теплые',
+      'острый', 'острое', 'острая', 'острые', 'сладкий', 'сладкое', 'сладкая', 'сладкие',
+      'кислый', 'кислое', 'кислая', 'кислые', 'соленый', 'соленое', 'соленая', 'соленые',
+      'жирный', 'жирное', 'жирная', 'жирные', 'легкий', 'легкое', 'легкая', 'легкие',
+      'тяжелый', 'тяжелое', 'тяжелая', 'тяжелые', 'густой', 'густое', 'густая', 'густые',
+      'жидкий', 'жидкое', 'жидкая', 'жидкие', 'гладкий', 'гладкое', 'гладкая', 'гладкие',
+      'шершавый', 'шершавое', 'шершавая', 'шершавые', 'кремовый', 'кремовое', 'кремовая',
+      'хрустящий', 'хрустящее', 'хрустящая', 'хрустящие', 'жевательный', 'жевательное',
+      'влажный', 'влажное', 'влажная', 'влажные', 'сухой', 'сухое', 'сухая', 'сухие'
+    ];
+
+    const russianVerbs = [
+      'расти', 'растущий', 'растущее', 'растущая', 'растущие', 'растет', 'растут',
+      'готовить', 'готовящий', 'готовящее', 'готовящая', 'готовящие', 'готовит', 'готовят',
+      'есть', 'едящий', 'едящее', 'едящая', 'едящие', 'ест', 'едят',
+      'подавать', 'подающий', 'подающее', 'подающая', 'подающие', 'подает', 'подают',
+      'резать', 'режущий', 'режущее', 'режущая', 'режущие', 'режет', 'режут',
+      'нарезать', 'нарезающий', 'нарезающее', 'нарезающая', 'нарезающие',
+      'мешать', 'мешающий', 'мешающее', 'мешающая', 'мешающие', 'мешает', 'мешают'
+    ];
+
+    // Фильтруем переведенные альтернативы
+    const filteredAlternatives = translatedAlternatives
+      .filter(alt => {
+        const name = alt.name.toLowerCase().trim();
+
+        // Проверяем на русские прилагательные
+        if (russianAdjectives.some(adj => name === adj || name.startsWith(adj + ' ') || name.endsWith(' ' + adj))) {
+          return false;
+        }
+
+        // Проверяем на русские глаголы
+        if (russianVerbs.some(verb => name === verb || name.startsWith(verb + ' ') || name.endsWith(' ' + verb))) {
+          return false;
+        }
+
+        // Проверяем оригинальное английское название еще раз
+        return isNounOrFoodItem(alt.originalName);
+      })
+      .slice(0, 3) // Оставляем максимум 3 альтернативы
+      .map(alt => ({
+        name: alt.name,
+        confidence: alt.confidence
+      }));
 
     return {
       dishName: dishNameRu,
@@ -270,7 +360,7 @@ async function translateToRussianAPI(englishName) {
   } catch (error) {
     console.warn(`⚠️ Ошибка перевода через API для "${englishName}": ${error.message}`);
   }
-  
+
   // Если перевод не удался, возвращаем оригинал
   return englishName;
 }
@@ -388,19 +478,19 @@ function translateToRussian(englishName) {
   };
 
   const lower = englishName.toLowerCase();
-  
+
   // Сначала проверяем точные совпадения
   if (translations[lower]) {
     return translations[lower];
   }
-  
+
   // Затем проверяем частичные совпадения
   for (const [en, ru] of Object.entries(translations)) {
     if (lower.includes(en)) {
       return ru;
     }
   }
-  
+
   // Если это комбинация (например, "pasta with meat"), пытаемся определить основное блюдо
   if (lower.includes('pasta') || lower.includes('macaroni') || lower.includes('noodle')) {
     if (lower.includes('meat') || lower.includes('beef') || lower.includes('pork')) {
@@ -408,7 +498,7 @@ function translateToRussian(englishName) {
     }
     return 'паста';
   }
-  
+
   // Если нет перевода в словаре, возвращаем оригинал (будет переведено через API в асинхронной функции)
   return englishName;
 }
@@ -417,12 +507,12 @@ function translateToRussian(englishName) {
 async function translateToRussianAsync(englishName) {
   // Сначала пробуем словарь
   const dictTranslation = translateToRussian(englishName);
-  
+
   // Если перевод из словаря отличается от оригинала, значит нашли перевод
   if (dictTranslation !== englishName) {
     return dictTranslation;
   }
-  
+
   // Если нет в словаре, используем API
   return await translateToRussianAPI(englishName);
 }
@@ -467,19 +557,19 @@ function translateToEnglish(russianName) {
   };
 
   const lower = russianName.toLowerCase();
-  
+
   // Точное совпадение
   if (translations[lower]) {
     return translations[lower];
   }
-  
+
   // Частичное совпадение
   for (const [ru, en] of Object.entries(translations)) {
     if (lower.includes(ru)) {
       return en;
     }
   }
-  
+
   return russianName; // Возвращаем оригинал, если нет перевода
 }
 
@@ -489,14 +579,14 @@ async function getCaloriesFromOpenFoodFacts(dishName) {
   try {
     // Пробуем поиск на русском
     let searchUrl = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(dishName)}&search_simple=1&action=process&json=1&page_size=5`;
-    
+
     let response = await axios.get(searchUrl, {
       timeout: 15000,
       validateStatus: (status) => status === 200
     });
 
     let products = response.data?.products || [];
-    
+
     // Если не нашли или калории = 0, пробуем поиск на английском
     if (products.length === 0 || !products.some(p => {
       const nutriments = p.nutriments || {};
@@ -518,7 +608,7 @@ async function getCaloriesFromOpenFoodFacts(dishName) {
     for (const product of products) {
       const nutriments = product.nutriments || {};
       const calories = Math.round(nutriments['energy-kcal_100g'] || nutriments['energy-kcal'] || 0);
-      
+
       if (calories > 0) {
         return {
           calories: calories,
@@ -548,7 +638,7 @@ async function getCaloriesFromUSDA(dishName) {
     // Пробуем поиск на английском
     const englishName = translateToEnglish(dishName);
     const searchUrl = `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(englishName)}&pageSize=5&api_key=DEMO_KEY`;
-    
+
     const response = await axios.get(searchUrl, {
       timeout: 15000,
       validateStatus: (status) => status === 200
@@ -557,7 +647,7 @@ async function getCaloriesFromUSDA(dishName) {
     if (response.data?.foods && response.data.foods.length > 0) {
       const food = response.data.foods[0];
       const nutrients = food.foodNutrients || [];
-      
+
       // Извлекаем данные о питательных веществах
       const getNutrient = (nutrientId) => {
         const nutrient = nutrients.find(n => n.nutrientId === nutrientId || n.nutrient?.id === nutrientId);
@@ -566,7 +656,7 @@ async function getCaloriesFromUSDA(dishName) {
 
       // USDA использует ID: 1008 (энергия в ккал), 1003 (белки), 1005 (углеводы), 1004 (жиры)
       const calories = Math.round(getNutrient(1008) || getNutrient(208) || 0);
-      
+
       if (calories > 0) {
         // Конвертируем из граммов в граммы (уже в правильных единицах)
         const protein = Math.round((getNutrient(1003) || getNutrient(203) || 0) * 10) / 10;
@@ -595,7 +685,7 @@ async function getCaloriesFromUSDA(dishName) {
 
 async function getCalories(dishName) {
   // Пробуем несколько источников по очереди
-  
+
   // 1. Open Food Facts
   let result = await getCaloriesFromOpenFoodFacts(dishName);
   if (result && result.calories > 0) {
@@ -766,8 +856,8 @@ app.post('/recognize', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     service: 'food-recognition-service',
     provider: 'clarifai',
     clarifai: !!CLARIFAI_API_KEY

@@ -33,6 +33,7 @@ const redis = new Redis({
 const recipeParserUrl = config.services.recipeParser;
 const databaseServiceUrl = config.services.database;
 const foodRecognitionServiceUrl = config.services.foodRecognition;
+const diaryServiceUrl = config.services.diary;
 
 // Вспомогательные функции для работы с Redis
 const getUserState = async (chatId) => {
@@ -555,6 +556,7 @@ bot.start(async (ctx) => {
       [{ text: "Поиск🔎", callback_data: "search" }],
       [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
       [{ text: "Распознать блюдо📸", callback_data: "recognize_food" }],
+      ...(hasActiveSub ? [[{ text: "📊 Дневник питания", callback_data: "diary_menu" }]] : []),
       [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
       [{ text: "Закрыть❌", callback_data: "close_menu" }]
     ]
@@ -2441,6 +2443,7 @@ bot.action("back_to_main", async (ctx) => {
         [{ text: "Поиск🔎", callback_data: "search" }],
         [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
         [{ text: "Распознать блюдо📸", callback_data: "recognize_food" }],
+        ...(hasActiveSub ? [[{ text: "📊 Дневник питания", callback_data: "diary_menu" }]] : []),
         [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
         [{ text: "Закрыть❌", callback_data: "close_menu" }]
       ]
@@ -2528,6 +2531,606 @@ bot.action("close_menu", async (ctx) => {
   await ctx.answerCbQuery();
 });
 
+// ==================== ОБРАБОТЧИКИ ДНЕВНИКА ПИТАНИЯ ====================
+
+// Обработчик меню дневника питания
+bot.action("diary_menu", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+
+  // Проверяем подписку
+  const user = await getUserByChatId(chatId);
+  let hasActiveSub = false;
+  if (user && user.subscription_end_date) {
+    hasActiveSub = new Date(user.subscription_end_date) > new Date();
+  }
+  if (!hasActiveSub) {
+    hasActiveSub = await hasActiveSubscription(chatId);
+  }
+
+  if (!hasActiveSub) {
+    await ctx.reply(
+      "📊 **Дневник питания**\n\n" +
+      "❌ Эта функция доступна только для подписчиков!\n\n" +
+      "💡 Оформите подписку, чтобы получить доступ к:\n" +
+      "• Дневнику питания с подсчетом БЖУ и калорий\n" +
+      "• Отслеживанию выпитой воды\n" +
+      "• Расчету суточной нормы калорий\n" +
+      "• Избранным рецептам",
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "💳 Оформить подписку", callback_data: "subscription_menu" }],
+            [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+          ]
+        }
+      }
+    );
+    return;
+  }
+
+  try {
+    // Переносим избранное из database-service в diary-service при первом входе
+    try {
+      const migrationKey = `user:diary_migrated:${chatId}`;
+      const isMigrated = await redis.get(migrationKey);
+
+      if (!isMigrated) {
+        // Получаем избранное из database-service
+        const oldFavoritesResponse = await axios.get(`${databaseServiceUrl}/favorites/${chatId}?pageSize=100`, {
+          timeout: 10000
+        });
+
+        if (oldFavoritesResponse.data && oldFavoritesResponse.data.length > 0) {
+          // Переносим каждое избранное в diary-service
+          for (const favorite of oldFavoritesResponse.data) {
+            try {
+              await axios.post(`${diaryServiceUrl}/favorites/${chatId}`, {
+                url: favorite.recipe_url,
+                title: favorite.recipe_title,
+                text: favorite.recipe_text,
+                dishType: favorite.dish_type,
+                hasPhoto: favorite.has_photo,
+                photoFileId: favorite.photo_file_id
+              }, {
+                timeout: 5000
+              });
+            } catch (err) {
+              // Игнорируем ошибки при переносе отдельных записей
+              console.warn(`Ошибка переноса избранного ${favorite.id}:`, err.message);
+            }
+          }
+          console.log(`✅ Перенесено ${oldFavoritesResponse.data.length} избранных рецептов для chatId=${chatId}`);
+        }
+
+        // Помечаем, что миграция выполнена
+        await redis.setex(migrationKey, 86400 * 365, '1'); // Храним год
+      }
+    } catch (migrationError) {
+      console.error('Ошибка миграции избранного:', migrationError);
+      // Продолжаем работу даже если миграция не удалась
+    }
+
+    // Получаем профиль пользователя
+    const profileResponse = await axios.get(`${diaryServiceUrl}/profiles/${chatId}`, {
+      timeout: 10000
+    });
+
+    const profile = profileResponse.data.profile;
+    const hasProfile = profile !== null;
+
+    // Получаем данные за сегодня
+    const today = new Date().toISOString().split('T')[0];
+    const diaryResponse = await axios.get(`${diaryServiceUrl}/diary/${chatId}/entries?date=${today}`, {
+      timeout: 10000
+    });
+    const waterResponse = await axios.get(`${diaryServiceUrl}/diary/${chatId}/water?date=${today}`, {
+      timeout: 10000
+    });
+
+    const diaryData = diaryResponse.data;
+    const waterData = waterResponse.data;
+
+    let message = "📊 **Дневник питания**\n\n";
+
+    if (!hasProfile) {
+      message += "⚠️ Для начала работы с дневником необходимо заполнить ваш профиль.\n\n";
+      message += "Нажмите 'Настроить профиль' чтобы ввести:\n";
+      message += "• Пол\n";
+      message += "• Возраст\n";
+      message += "• Рост\n";
+      message += "• Вес\n";
+      message += "• Образ жизни\n\n";
+    } else {
+      // Показываем нормы калорий
+      if (profile.calorieGoals) {
+        message += "🎯 **Ваши цели по калориям:**\n";
+        message += `• Сброс веса: ${profile.calorieGoals.weight_loss} ккал\n`;
+        message += `• Поддержание: ${profile.calorieGoals.weight_maintenance} ккал\n`;
+        message += `• Набор массы: ${profile.calorieGoals.muscle_gain} ккал\n\n`;
+      }
+
+      // Показываем данные за сегодня
+      message += `📅 **Сегодня (${today}):**\n`;
+      message += `🔥 Калории: ${diaryData.totals.calories} / ${profile.calorieGoals ? profile.calorieGoals.weight_maintenance : '—'} ккал\n`;
+      message += `🥗 Белки: ${diaryData.totals.protein}г\n`;
+      message += `🍞 Углеводы: ${diaryData.totals.carbs}г\n`;
+      message += `🧈 Жиры: ${diaryData.totals.fats}г\n`;
+      message += `💧 Вода: ${waterData.water.amount_ml || 0} мл\n\n`;
+
+      if (diaryData.entries.length > 0) {
+        message += "🍽️ **Блюда сегодня:**\n";
+        diaryData.entries.forEach((entry, index) => {
+          message += `${index + 1}. ${entry.dish_name} (${entry.calories} ккал)\n`;
+        });
+        message += "\n";
+      }
+    }
+
+    const keyboard = {
+      inline_keyboard: []
+    };
+
+    if (!hasProfile) {
+      keyboard.inline_keyboard.push([{ text: "⚙️ Настроить профиль", callback_data: "diary_setup_profile" }]);
+    } else {
+      keyboard.inline_keyboard.push([
+        { text: "➕ Добавить блюдо", callback_data: "diary_add_food" },
+        { text: "💧 Добавить воду", callback_data: "diary_add_water" }
+      ]);
+      keyboard.inline_keyboard.push([
+        { text: "📊 Статистика", callback_data: "diary_stats" },
+        { text: "⚙️ Редактировать профиль", callback_data: "diary_setup_profile" }
+      ]);
+      keyboard.inline_keyboard.push([{ text: "⭐ Избранное", callback_data: "diary_favorites" }]);
+    }
+
+    keyboard.inline_keyboard.push([{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]);
+
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard
+    });
+  } catch (error) {
+    console.error('Ошибка получения данных дневника:', error);
+    await ctx.reply(
+      "❌ Ошибка загрузки дневника. Попробуйте позже.",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
+          ]
+        }
+      }
+    );
+  }
+});
+
+// Обработчик настройки профиля
+bot.action("diary_setup_profile", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+
+  // Проверяем подписку
+  const user = await getUserByChatId(chatId);
+  let hasActiveSub = false;
+  if (user && user.subscription_end_date) {
+    hasActiveSub = new Date(user.subscription_end_date) > new Date();
+  }
+  if (!hasActiveSub) {
+    hasActiveSub = await hasActiveSubscription(chatId);
+  }
+
+  if (!hasActiveSub) {
+    await ctx.reply("❌ Дневник питания доступен только для подписчиков!");
+    return;
+  }
+
+  // Устанавливаем состояние для ввода профиля
+  await setUserState(chatId, 10); // Состояние 10 - ввод профиля
+
+  await ctx.reply(
+    "⚙️ **Настройка профиля**\n\n" +
+    "Для расчета вашей суточной нормы калорий мне нужны следующие данные:\n\n" +
+    "1️⃣ **Пол** - отправьте: мужской или женский\n" +
+    "2️⃣ **Возраст** - отправьте число (например: 25)\n" +
+    "3️⃣ **Рост** - отправьте в см (например: 175)\n" +
+    "4️⃣ **Вес** - отправьте в кг (например: 70)\n" +
+    "5️⃣ **Образ жизни** - выберите один из вариантов:\n" +
+    "   • Малоподвижный (сидячая работа, минимум активности)\n" +
+    "   • Легкая активность (тренировки 1-3 раза в неделю)\n" +
+    "   • Умеренная активность (тренировки 3-5 раз в неделю)\n" +
+    "   • Высокая активность (тренировки 6-7 раз в неделю)\n" +
+    "   • Очень высокая активность (физическая работа)\n\n" +
+    "Отправляйте данные по одному, я буду запоминать их.",
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+        ]
+      }
+    }
+  );
+});
+
+// Обработчик добавления блюда
+bot.action("diary_add_food", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+
+  // Проверяем подписку
+  const user = await getUserByChatId(chatId);
+  let hasActiveSub = false;
+  if (user && user.subscription_end_date) {
+    hasActiveSub = new Date(user.subscription_end_date) > new Date();
+  }
+  if (!hasActiveSub) {
+    hasActiveSub = await hasActiveSubscription(chatId);
+  }
+
+  if (!hasActiveSub) {
+    await ctx.reply("❌ Дневник питания доступен только для подписчиков!");
+    return;
+  }
+
+  // Устанавливаем состояние для добавления блюда
+  await setUserState(chatId, 11); // Состояние 11 - добавление блюда
+
+  await ctx.reply(
+    "➕ **Добавление блюда в дневник**\n\n" +
+    "Отправьте название блюда и его калорийность в формате:\n" +
+    "`Название блюда | калории | белки | углеводы | жиры`\n\n" +
+    "Пример:\n" +
+    "`Яблоко | 52 | 0.3 | 14 | 0.2`\n\n" +
+    "Или просто название блюда, и я попробую найти его калорийность автоматически.",
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+        ]
+      }
+    }
+  );
+});
+
+// Обработчик добавления воды
+bot.action("diary_add_water", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+
+  // Проверяем подписку
+  const user = await getUserByChatId(chatId);
+  let hasActiveSub = false;
+  if (user && user.subscription_end_date) {
+    hasActiveSub = new Date(user.subscription_end_date) > new Date();
+  }
+  if (!hasActiveSub) {
+    hasActiveSub = await hasActiveSubscription(chatId);
+  }
+
+  if (!hasActiveSub) {
+    await ctx.reply("❌ Дневник питания доступен только для подписчиков!");
+    return;
+  }
+
+  // Устанавливаем состояние для добавления воды
+  await setUserState(chatId, 12); // Состояние 12 - добавление воды
+
+  await ctx.reply(
+    "💧 **Добавление воды**\n\n" +
+    "Отправьте количество выпитой воды в миллилитрах.\n\n" +
+    "Примеры:\n" +
+    "• `250` - стакан воды\n" +
+    "• `500` - пол-литра\n" +
+    "• `1000` - литр",
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+        ]
+      }
+    }
+  );
+});
+
+// Обработчик избранного в дневнике
+bot.action("diary_favorites", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+
+  // Проверяем подписку
+  const user = await getUserByChatId(chatId);
+  let hasActiveSub = false;
+  if (user && user.subscription_end_date) {
+    hasActiveSub = new Date(user.subscription_end_date) > new Date();
+  }
+  if (!hasActiveSub) {
+    hasActiveSub = await hasActiveSubscription(chatId);
+  }
+
+  if (!hasActiveSub) {
+    await ctx.reply("❌ Дневник питания доступен только для подписчиков!");
+    return;
+  }
+
+  try {
+    const response = await axios.get(`${diaryServiceUrl}/favorites/${chatId}?pageSize=10`, {
+      timeout: 10000
+    });
+
+    const favorites = response.data;
+
+    if (favorites.length === 0) {
+      await ctx.reply(
+        "⭐ **Избранное**\n\n" +
+        "У вас пока нет избранных рецептов.",
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "◀️ Вернуться в дневник", callback_data: "diary_menu" }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+
+    let message = "⭐ **Избранное**\n\n";
+    favorites.forEach((fav, index) => {
+      message += `${index + 1}. ${fav.recipe_title}\n`;
+    });
+
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "◀️ Вернуться в дневник", callback_data: "diary_menu" }]
+        ]
+      }
+    });
+  } catch (error) {
+    console.error('Ошибка получения избранного:', error);
+    await ctx.reply("❌ Ошибка загрузки избранного.");
+  }
+});
+
+// Обработчик текстовых сообщений для дневника
+bot.on("text", async (ctx) => {
+  const chatId = ctx.chat.id;
+  const text = ctx.message.text;
+  const state = await getUserState(chatId);
+
+  // Обработка ввода профиля (состояние 10)
+  if (state === 10) {
+    // Получаем текущий прогресс заполнения профиля
+    const profileDataKey = `user:profile:${chatId}`;
+    const profileDataStr = await redis.get(profileDataKey);
+    let profileData = profileDataStr ? JSON.parse(profileDataStr) : { step: 1 };
+
+    const lowerText = text.toLowerCase().trim();
+
+    try {
+      if (profileData.step === 1) {
+        // Ввод пола
+        if (lowerText.includes('муж') || lowerText.includes('male') || lowerText === 'м') {
+          profileData.gender = 'male';
+          profileData.step = 2;
+          await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
+          await ctx.reply("✅ Пол сохранен: Мужской\n\n2️⃣ Отправьте ваш возраст (число, например: 25)");
+        } else if (lowerText.includes('жен') || lowerText.includes('female') || lowerText === 'ж') {
+          profileData.gender = 'female';
+          profileData.step = 2;
+          await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
+          await ctx.reply("✅ Пол сохранен: Женский\n\n2️⃣ Отправьте ваш возраст (число, например: 25)");
+        } else {
+          await ctx.reply("❌ Пожалуйста, укажите пол: мужской или женский");
+        }
+      } else if (profileData.step === 2) {
+        // Ввод возраста
+        const age = parseInt(text);
+        if (isNaN(age) || age < 1 || age > 150) {
+          await ctx.reply("❌ Пожалуйста, отправьте корректный возраст (число от 1 до 150)");
+        } else {
+          profileData.age = age;
+          profileData.step = 3;
+          await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
+          await ctx.reply(`✅ Возраст сохранен: ${age} лет\n\n3️⃣ Отправьте ваш рост в см (например: 175)`);
+        }
+      } else if (profileData.step === 3) {
+        // Ввод роста
+        const height = parseInt(text);
+        if (isNaN(height) || height < 50 || height > 300) {
+          await ctx.reply("❌ Пожалуйста, отправьте корректный рост в см (от 50 до 300)");
+        } else {
+          profileData.height = height;
+          profileData.step = 4;
+          await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
+          await ctx.reply(`✅ Рост сохранен: ${height} см\n\n4️⃣ Отправьте ваш вес в кг (например: 70)`);
+        }
+      } else if (profileData.step === 4) {
+        // Ввод веса
+        const weight = parseFloat(text.replace(',', '.'));
+        if (isNaN(weight) || weight < 10 || weight > 500) {
+          await ctx.reply("❌ Пожалуйста, отправьте корректный вес в кг (от 10 до 500)");
+        } else {
+          profileData.weight = weight;
+          profileData.step = 5;
+          await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
+          await ctx.reply(
+            `✅ Вес сохранен: ${weight} кг\n\n5️⃣ Выберите ваш образ жизни:\n` +
+            `• Малоподвижный\n` +
+            `• Легкая активность\n` +
+            `• Умеренная активность\n` +
+            `• Высокая активность\n` +
+            `• Очень высокая активность`
+          );
+        }
+      } else if (profileData.step === 5) {
+        // Ввод образа жизни
+        let activityLevel = null;
+        if (lowerText.includes('малоподвиж') || lowerText.includes('сидяч')) {
+          activityLevel = 'sedentary';
+        } else if (lowerText.includes('легк') && lowerText.includes('актив')) {
+          activityLevel = 'light';
+        } else if (lowerText.includes('умерен') && lowerText.includes('актив')) {
+          activityLevel = 'moderate';
+        } else if (lowerText.includes('высок') && lowerText.includes('актив') && !lowerText.includes('очень')) {
+          activityLevel = 'active';
+        } else if (lowerText.includes('очень') || (lowerText.includes('высок') && lowerText.includes('актив'))) {
+          activityLevel = 'very_active';
+        }
+
+        if (!activityLevel) {
+          await ctx.reply("❌ Пожалуйста, выберите один из вариантов образа жизни");
+        } else {
+          profileData.activityLevel = activityLevel;
+
+          // Сохраняем профиль
+          const response = await axios.post(`${diaryServiceUrl}/profiles/${chatId}`, {
+            gender: profileData.gender,
+            age: profileData.age,
+            height: profileData.height,
+            weight: profileData.weight,
+            activityLevel: profileData.activityLevel
+          }, {
+            timeout: 10000
+          });
+
+          // Удаляем временные данные
+          await redis.del(profileDataKey);
+          await setUserState(chatId, 0);
+
+          const profile = response.data.profile;
+          let message = "✅ **Профиль успешно сохранен!**\n\n";
+          message += `🎯 **Ваши цели по калориям:**\n`;
+          message += `• Сброс веса: ${profile.calorieGoals.weight_loss} ккал\n`;
+          message += `• Поддержание: ${profile.calorieGoals.weight_maintenance} ккал\n`;
+          message += `• Набор массы: ${profile.calorieGoals.muscle_gain} ккал\n\n`;
+          message += "Теперь вы можете использовать дневник питания!";
+
+          await ctx.reply(message, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "📊 Открыть дневник", callback_data: "diary_menu" }],
+                [{ text: "◀️ Главная", callback_data: "back_to_main" }]
+              ]
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Ошибка сохранения профиля:', error);
+      await ctx.reply("❌ Ошибка сохранения профиля. Попробуйте еще раз.");
+    }
+    return;
+  }
+
+  // Обработка добавления блюда (состояние 11)
+  if (state === 11) {
+    try {
+      // Парсим ввод пользователя
+      const parts = text.split('|').map(p => p.trim());
+
+      let dishName = parts[0];
+      let calories = 0;
+      let protein = 0;
+      let carbs = 0;
+      let fats = 0;
+
+      if (parts.length >= 2) {
+        calories = parseFloat(parts[1]) || 0;
+        protein = parseFloat(parts[2]) || 0;
+        carbs = parseFloat(parts[3]) || 0;
+        fats = parseFloat(parts[4]) || 0;
+      } else {
+        // Пытаемся найти калорийность через food-recognition-service
+        // Пока просто используем примерные значения
+        await ctx.reply("Поиск калорийности в разработке. Пожалуйста, укажите калории вручную в формате:\n`Название | калории | белки | углеводы | жиры`");
+        return;
+      }
+
+      const response = await axios.post(`${diaryServiceUrl}/diary/${chatId}/entries`, {
+        dishName,
+        calories,
+        protein,
+        carbs,
+        fats
+      }, {
+        timeout: 10000
+      });
+
+      await setUserState(chatId, 0);
+      await ctx.reply(
+        `✅ Блюдо "${dishName}" добавлено в дневник!\n\n` +
+        `🔥 Калории: ${calories} ккал\n` +
+        `🥗 Белки: ${protein}г\n` +
+        `🍞 Углеводы: ${carbs}г\n` +
+        `🧈 Жиры: ${fats}г`,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "📊 Дневник", callback_data: "diary_menu" }],
+              [{ text: "◀️ Главная", callback_data: "back_to_main" }]
+            ]
+          }
+        }
+      );
+    } catch (error) {
+      console.error('Ошибка добавления блюда:', error);
+      await ctx.reply("❌ Ошибка добавления блюда. Попробуйте еще раз.");
+    }
+    return;
+  }
+
+  // Обработка добавления воды (состояние 12)
+  if (state === 12) {
+    try {
+      const amountMl = parseInt(text);
+      if (isNaN(amountMl) || amountMl < 0) {
+        await ctx.reply("❌ Пожалуйста, отправьте число (количество миллилитров).");
+        return;
+      }
+
+      // Получаем текущее количество воды
+      const waterResponse = await axios.get(`${diaryServiceUrl}/diary/${chatId}/water`, {
+        timeout: 10000
+      });
+      const currentAmount = waterResponse.data.water.amount_ml || 0;
+
+      // Добавляем новое количество
+      await axios.post(`${diaryServiceUrl}/diary/${chatId}/water`, {
+        amountMl: currentAmount + amountMl
+      }, {
+        timeout: 10000
+      });
+
+      await setUserState(chatId, 0);
+      await ctx.reply(
+        `✅ Добавлено ${amountMl} мл воды!\n\n` +
+        `💧 Всего за сегодня: ${currentAmount + amountMl} мл`,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "📊 Дневник", callback_data: "diary_menu" }],
+              [{ text: "◀️ Главная", callback_data: "back_to_main" }]
+            ]
+          }
+        }
+      );
+    } catch (error) {
+      console.error('Ошибка добавления воды:', error);
+      await ctx.reply("❌ Ошибка добавления воды. Попробуйте еще раз.");
+    }
+    return;
+  }
+});
+
 // Обработчик запуска бота
 bot.action("start_bot", async (ctx) => {
   const chatId = ctx.chat.id;
@@ -2584,6 +3187,7 @@ bot.action("start_bot", async (ctx) => {
         [{ text: "Поиск🔎", callback_data: "search" }],
         [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
         [{ text: "Распознать блюдо📸", callback_data: "recognize_food" }],
+        ...(hasActiveSub ? [[{ text: "📊 Дневник питания", callback_data: "diary_menu" }]] : []),
         [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
         [{ text: "Закрыть❌", callback_data: "close_menu" }]
       ]

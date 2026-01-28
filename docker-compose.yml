@@ -85,6 +85,7 @@ services:
       DATABASE_SERVICE_URL: http://database-service:3002
       RECIPE_PARSER_URL: http://recipe-parser-service:3001
       FOOD_RECOGNITION_URL: http://food-recognition-service:3004
+      DIARY_SERVICE_URL: http://diary-service:3005
       FOOD_URL: ${FOOD_URL:-https://1000.menu/catalog/na-zavtrak}
       DINNER_URL: ${DINNER_URL:-https://1000.menu/catalog/pp-obed}
       LUNCH_URL: ${LUNCH_URL:-https://1000.menu/catalog/zvanji-uzhin}
@@ -97,6 +98,8 @@ services:
       recipe-parser-service:
         condition: service_started
       food-recognition-service:
+        condition: service_started
+      diary-service:
         condition: service_started
     restart: unless-stopped
     networks:
@@ -111,6 +114,29 @@ services:
       PORT: 3004
       # Clarifai API (бесплатно до 1000 запросов/месяц, БЕЗ карты!)
       CLARIFAI_API_KEY: ${CLARIFAI_API_KEY:-}
+    restart: unless-stopped
+    networks:
+      - tgbot_network
+
+  diary-service:
+    build:
+      context: .
+      dockerfile: services/diary-service/Dockerfile
+    container_name: tgbot_diary
+    environment:
+      PORT: 3005
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-tgbot_db}
+      DB_USER: ${DB_USER:-tgbot_user}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_SSL: ${DB_SSL:-false}
+      DATABASE_SERVICE_URL: http://database-service:3002
+    depends_on:
+      postgres:
+        condition: service_healthy
+      database-service:
+        condition: service_started
     restart: unless-stopped
     networks:
       - tgbot_network

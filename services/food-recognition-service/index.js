@@ -971,6 +971,111 @@ app.get('/nutrition', async (req, res) => {
   }
 });
 
+// Поиск нескольких вариантов БЖУ (для выбора пользователем)
+async function getNutritionOptions(query, limit = 5) {
+  const results = [];
+  const seenNames = new Set();
+
+  try {
+    // 1. Open Food Facts — полная фраза (русский и английский)
+    for (const searchTerm of [query, translateToEnglish(query)]) {
+      if (!searchTerm || searchTerm.length < 2) continue;
+      const products = await searchOpenFoodFacts(searchTerm, limit * 2);
+      for (const product of products) {
+        const result = parseProductNutriments(product, query);
+        if (result && !seenNames.has((result.productName || '').toLowerCase())) {
+          seenNames.add((result.productName || '').toLowerCase());
+          results.push({
+            dishName: result.productName || query,
+            calories: result.calories,
+            protein: result.protein ?? 0,
+            carbs: result.carbs ?? 0,
+            fats: result.fats ?? 0,
+            source: result.source || 'Open Food Facts'
+          });
+          if (results.length >= limit) return results;
+        }
+      }
+    }
+
+    // 2. Ключевые слова (русский)
+    const stopWords = /\s+(с|и|из|на|в|по|для)\s+/gi;
+    const keyParts = query.replace(stopWords, ' ').split(/\s+/).filter(w => w.length > 1);
+    for (const part of keyParts) {
+      const products = await searchOpenFoodFacts(part, limit * 2);
+      for (const product of products) {
+        const result = parseProductNutriments(product, query);
+        if (result && !seenNames.has((result.productName || '').toLowerCase())) {
+          seenNames.add((result.productName || '').toLowerCase());
+          results.push({
+            dishName: result.productName || query,
+            calories: result.calories,
+            protein: result.protein ?? 0,
+            carbs: result.carbs ?? 0,
+            fats: result.fats ?? 0,
+            source: result.source || 'Open Food Facts'
+          });
+          if (results.length >= limit) return results;
+        }
+      }
+    }
+
+    // 3. Если ничего не нашли — один вариант из примерных значений
+    if (results.length === 0) {
+      const fallback = getEstimatedCalories(query);
+      results.push({
+        dishName: fallback.productName || query,
+        calories: fallback.calories,
+        protein: fallback.protein ?? 0,
+        carbs: fallback.carbs ?? 0,
+        fats: fallback.fats ?? 0,
+        source: fallback.source || 'Примерные значения'
+      });
+    }
+
+    return results;
+  } catch (err) {
+    console.warn(`⚠️ getNutritionOptions для "${query}":`, err.message);
+    const fallback = getEstimatedCalories(query);
+    return [{
+      dishName: fallback.productName || query,
+      calories: fallback.calories,
+      protein: fallback.protein ?? 0,
+      carbs: fallback.carbs ?? 0,
+      fats: fallback.fats ?? 0,
+      source: fallback.source || 'Примерные значения'
+    }];
+  }
+}
+
+app.get('/nutrition/search', async (req, res) => {
+  try {
+    const query = (req.query.query || req.query.name || '').trim();
+    const limit = Math.min(parseInt(req.query.limit) || 5, 10);
+    if (!query) {
+      return res.status(400).json({
+        success: false,
+        error: 'Укажите название блюда (query или name)'
+      });
+    }
+
+    console.log(`🔍 Поиск вариантов БЖУ: "${query}", limit=${limit}`);
+    const results = await getNutritionOptions(query, limit);
+
+    res.json({
+      success: true,
+      query,
+      results
+    });
+  } catch (error) {
+    console.error('❌ Ошибка /nutrition/search:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Ошибка поиска БЖУ'
+    });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',

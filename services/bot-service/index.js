@@ -2886,6 +2886,132 @@ bot.action("diary_add_food", async (ctx) => {
   );
 });
 
+// Подтверждение добавления найденного блюда (галочка)
+bot.action("diary_confirm_food", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+
+  const pendingKey = `user:diary_pending:${chatId}`;
+  const pendingStr = await redis.get(pendingKey);
+  if (!pendingStr) {
+    await ctx.reply("❌ Данные устарели. Введите название блюда заново.", {
+      reply_markup: { inline_keyboard: [[{ text: "➕ Добавить блюдо", callback_data: "diary_add_food" }]] }
+    });
+    return;
+  }
+
+  const pending = JSON.parse(pendingStr);
+  const { results, index } = pending;
+  const item = results[index];
+
+  try {
+    await axios.post(`${diaryServiceUrl}/diary/${chatId}/entries`, {
+      dishName: item.dishName,
+      calories: item.calories,
+      protein: item.protein,
+      carbs: item.carbs,
+      fats: item.fats
+    }, { timeout: 10000 });
+
+    await redis.del(pendingKey);
+    await setUserState(chatId, 0);
+
+    let replyText = `✅ Блюдо "${item.dishName}" добавлено в дневник!\n\n` +
+      `🔥 Калории: ${item.calories} ккал\n` +
+      `🥗 Белки: ${item.protein}г\n` +
+      `🍞 Углеводы: ${item.carbs}г\n` +
+      `🧈 Жиры: ${item.fats}г`;
+    if (item.source) {
+      replyText += `\n\n📚 Источник: ${item.source}`;
+    }
+    await ctx.reply(replyText, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📊 Дневник", callback_data: "diary_menu" }],
+          [{ text: "◀️ Главная", callback_data: "back_to_main" }]
+        ]
+      }
+    });
+  } catch (error) {
+    console.error('Ошибка добавления блюда в дневник:', error);
+    await ctx.reply("❌ Ошибка добавления в дневник. Попробуйте ещё раз.");
+  }
+});
+
+// «Не то» — показать следующий вариант из поиска
+bot.action("diary_reject_food", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+
+  const pendingKey = `user:diary_pending:${chatId}`;
+  const pendingStr = await redis.get(pendingKey);
+  if (!pendingStr) {
+    await ctx.reply("❌ Данные устарели. Введите название блюда заново.", {
+      reply_markup: { inline_keyboard: [[{ text: "➕ Добавить блюдо", callback_data: "diary_add_food" }]] }
+    });
+    return;
+  }
+
+  const pending = JSON.parse(pendingStr);
+  pending.index += 1;
+
+  if (pending.index >= pending.results.length) {
+    await redis.del(pendingKey);
+    await setUserState(chatId, 11);
+    await ctx.reply(
+      "❌ Других вариантов по вашему запросу не найдено.\n\n" +
+      "Введите БЖУ вручную в формате:\n" +
+      "`Название | калории | белки | углеводы | жиры`\n\n" +
+      "Или отправьте другое название блюда для нового поиска.",
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+          ]
+        }
+      }
+    );
+    return;
+  }
+
+  const item = pending.results[pending.index];
+  await redis.setex(pendingKey, 600, JSON.stringify(pending));
+
+  const msg = `🔍 **Следующий вариант:** ${item.dishName}\n\n` +
+    `🔥 Калории: ${item.calories} ккал\n` +
+    `🥗 Белки: ${item.protein}г\n` +
+    `🍞 Углеводы: ${item.carbs}г\n` +
+    `🧈 Жиры: ${item.fats}г\n\n` +
+    `📚 Источник: ${item.source || '—'}\n\n` +
+    `Подходит? Добавить в дневник?`;
+  await ctx.editMessageText(msg, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "✅", callback_data: "diary_confirm_food" },
+          { text: "❌", callback_data: "diary_reject_food" }
+        ],
+        [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+      ]
+    }
+  }).catch(async () => {
+    await ctx.reply(msg, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "✅", callback_data: "diary_confirm_food" },
+            { text: "❌", callback_data: "diary_reject_food" }
+          ],
+          [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+        ]
+      }
+    });
+  });
+});
+
 // Обработчик добавления воды
 bot.action("diary_add_water", async (ctx) => {
   await ctx.answerCbQuery();
@@ -3135,36 +3261,65 @@ bot.on("text", async (ctx) => {
       let source = '';
 
       if (parts.length >= 2) {
-        // Ручной ввод: Название | калории | белки | углеводы | жиры
+        // Ручной ввод: Название | калории | белки | углеводы | жиры — добавляем сразу без подтверждения
         calories = parseFloat(parts[1]) || 0;
         protein = parseFloat(parts[2]) || 0;
         carbs = parseFloat(parts[3]) || 0;
         fats = parseFloat(parts[4]) || 0;
       } else {
-        // Только название — ищем БЖУ через API (Open Food Facts, USDA, примерные значения)
+        // Только название — ищем варианты и показываем первый с кнопками ✓ / ✗
+        const searchQuery = dishName.trim();
         try {
-          const nutritionResponse = await axios.get(`${foodRecognitionServiceUrl}/nutrition`, {
-            params: { query: dishName.trim() },
+          const searchResponse = await axios.get(`${foodRecognitionServiceUrl}/nutrition/search`, {
+            params: { query: searchQuery, limit: 5 },
             timeout: 15000
           });
-          if (nutritionResponse.data?.success) {
-            dishName = nutritionResponse.data.dishName || dishName;
-            calories = nutritionResponse.data.calories ?? 0;
-            protein = nutritionResponse.data.protein ?? 0;
-            carbs = nutritionResponse.data.carbs ?? 0;
-            fats = nutritionResponse.data.fats ?? 0;
-            source = nutritionResponse.data.source || '';
+          if (!searchResponse.data?.success || !searchResponse.data.results?.length) {
+            await ctx.reply(
+              "❌ Не удалось найти данные по этому блюду. Укажите БЖУ вручную в формате:\n`Название | калории | белки | углеводы | жиры`",
+              { parse_mode: 'Markdown' }
+            );
+            return;
           }
+          const results = searchResponse.data.results;
+          const first = results[0];
+          const pendingKey = `user:diary_pending:${chatId}`;
+          await redis.setex(pendingKey, 600, JSON.stringify({
+            query: searchQuery,
+            results,
+            index: 0
+          }));
+
+          const msg = `🔍 **Найдено:** ${first.dishName}\n\n` +
+            `🔥 Калории: ${first.calories} ккал\n` +
+            `🥗 Белки: ${first.protein}г\n` +
+            `🍞 Углеводы: ${first.carbs}г\n` +
+            `🧈 Жиры: ${first.fats}г\n\n` +
+            `📚 Источник: ${first.source || '—'}\n\n` +
+            `Подходит? Добавить в дневник?`;
+          await ctx.reply(msg, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: "✅", callback_data: "diary_confirm_food" },
+                  { text: "❌", callback_data: "diary_reject_food" }
+                ],
+                [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+              ]
+            }
+          });
         } catch (apiError) {
           console.error('Ошибка поиска БЖУ по названию:', apiError.message);
           await ctx.reply(
             "❌ Не удалось найти данные по этому блюду. Укажите БЖУ вручную в формате:\n`Название | калории | белки | углеводы | жиры`",
             { parse_mode: 'Markdown' }
           );
-          return;
         }
+        return;
       }
 
+      // Ручной ввод — добавляем сразу
       const response = await axios.post(`${diaryServiceUrl}/diary/${chatId}/entries`, {
         dishName,
         calories,

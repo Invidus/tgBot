@@ -554,10 +554,13 @@ bot.start(async (ctx) => {
       [{ text: "Обед🍜", callback_data: "dinner" }],
       [{ text: "Ужин🍝", callback_data: "lunch" }],
       [{ text: "Поиск🔎", callback_data: "search" }],
-      [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
-      [{ text: "Распознать блюдо📸", callback_data: "recognize_food" }],
-      ...(hasActiveSub ? [[{ text: "📊 Дневник питания", callback_data: "diary_menu" }]] : []),
-      [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
+      [
+        { text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" },
+        { text: "Распознать блюдо📸", callback_data: "recognize_food" }
+      ],
+      ...(hasActiveSub
+        ? [[{ text: "📊 Дневник питания", callback_data: "diary_menu" }, { text: "💳 Подписка активна", callback_data: "subscription_menu" }]]
+        : [[{ text: "💳 Подписка", callback_data: "subscription_menu" }]]),
       [{ text: "Закрыть❌", callback_data: "close_menu" }]
     ]
   };
@@ -2441,10 +2444,13 @@ bot.action("back_to_main", async (ctx) => {
         [{ text: "Обед🍜", callback_data: "dinner" }],
         [{ text: "Ужин🍝", callback_data: "lunch" }],
         [{ text: "Поиск🔎", callback_data: "search" }],
-        [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
-        [{ text: "Распознать блюдо📸", callback_data: "recognize_food" }],
-        ...(hasActiveSub ? [[{ text: "📊 Дневник питания", callback_data: "diary_menu" }]] : []),
-        [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
+        [
+          { text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" },
+          { text: "Распознать блюдо📸", callback_data: "recognize_food" }
+        ],
+        ...(hasActiveSub
+          ? [[{ text: "📊 Дневник питания", callback_data: "diary_menu" }, { text: "💳 Подписка активна", callback_data: "subscription_menu" }]]
+          : [[{ text: "💳 Подписка", callback_data: "subscription_menu" }]]),
         [{ text: "Закрыть❌", callback_data: "close_menu" }]
       ]
     }
@@ -2755,7 +2761,6 @@ bot.action("diary_menu", async (ctx) => {
         { text: "📊 Статистика", callback_data: "diary_stats" },
         { text: "⚙️ Редактировать профиль", callback_data: "diary_setup_profile" }
       ]);
-      keyboard.inline_keyboard.push([{ text: "⭐ Избранное", callback_data: "diary_favorites" }]);
     }
 
     keyboard.inline_keyboard.push([{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]);
@@ -3051,68 +3056,6 @@ bot.action("diary_add_water", async (ctx) => {
       }
     }
   );
-});
-
-// Обработчик избранного в дневнике
-bot.action("diary_favorites", async (ctx) => {
-  await ctx.answerCbQuery();
-  const chatId = ctx.chat.id;
-
-  // Проверяем подписку
-  const user = await getUserByChatId(chatId);
-  let hasActiveSub = false;
-  if (user && user.subscription_end_date) {
-    hasActiveSub = new Date(user.subscription_end_date) > new Date();
-  }
-  if (!hasActiveSub) {
-    hasActiveSub = await hasActiveSubscription(chatId);
-  }
-
-  if (!hasActiveSub) {
-    await ctx.reply("❌ Дневник питания доступен только для подписчиков!");
-    return;
-  }
-
-  try {
-    const response = await axios.get(`${diaryServiceUrl}/favorites/${chatId}?pageSize=10`, {
-      timeout: 10000
-    });
-
-    const favorites = response.data;
-
-    if (favorites.length === 0) {
-      await ctx.reply(
-        "⭐ **Избранное**\n\n" +
-        "У вас пока нет избранных рецептов.",
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "◀️ Вернуться в дневник", callback_data: "diary_menu" }]
-            ]
-          }
-        }
-      );
-      return;
-    }
-
-    let message = "⭐ **Избранное**\n\n";
-    favorites.forEach((fav, index) => {
-      message += `${index + 1}. ${fav.recipe_title}\n`;
-    });
-
-    await ctx.reply(message, {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "◀️ Вернуться в дневник", callback_data: "diary_menu" }]
-        ]
-      }
-    });
-  } catch (error) {
-    console.error('Ошибка получения избранного:', error);
-    await ctx.reply("❌ Ошибка загрузки избранного.");
-  }
 });
 
 // Обработчик текстовых сообщений для дневника
@@ -3451,10 +3394,13 @@ bot.action("start_bot", async (ctx) => {
         [{ text: "Обед🍜", callback_data: "dinner" }],
         [{ text: "Ужин🍝", callback_data: "lunch" }],
         [{ text: "Поиск🔎", callback_data: "search" }],
-        [{ text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" }],
-        [{ text: "Распознать блюдо📸", callback_data: "recognize_food" }],
-        ...(hasActiveSub ? [[{ text: "📊 Дневник питания", callback_data: "diary_menu" }]] : []),
-        [{ text: hasActiveSub ? "💳 Подписка активна" : "💳 Подписка", callback_data: "subscription_menu" }],
+        [
+          { text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" },
+          { text: "Распознать блюдо📸", callback_data: "recognize_food" }
+        ],
+        ...(hasActiveSub
+          ? [[{ text: "📊 Дневник питания", callback_data: "diary_menu" }, { text: "💳 Подписка активна", callback_data: "subscription_menu" }]]
+          : [[{ text: "💳 Подписка", callback_data: "subscription_menu" }]]),
         [{ text: "Закрыть❌", callback_data: "close_menu" }]
       ]
     }

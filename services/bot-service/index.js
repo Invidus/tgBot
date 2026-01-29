@@ -2871,11 +2871,10 @@ bot.action("diary_add_food", async (ctx) => {
 
   await ctx.reply(
     "➕ **Добавление блюда в дневник**\n\n" +
-    "Отправьте название блюда и его калорийность в формате:\n" +
-    "`Название блюда | калории | белки | углеводы | жиры`\n\n" +
-    "Пример:\n" +
-    "`Яблоко | 52 | 0.3 | 14 | 0.2`\n\n" +
-    "Или просто название блюда, и я попробую найти его калорийность автоматически.",
+    "Отправьте **только название блюда** — БЖУ подставятся автоматически из базы (Open Food Facts, USDA).\n\n" +
+    "Или введите вручную:\n" +
+    "`Название | калории | белки | углеводы | жиры`\n\n" +
+    "Пример: `Яблоко | 52 | 0.3 | 14 | 0.2`",
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -3133,17 +3132,37 @@ bot.on("text", async (ctx) => {
       let protein = 0;
       let carbs = 0;
       let fats = 0;
+      let source = '';
 
       if (parts.length >= 2) {
+        // Ручной ввод: Название | калории | белки | углеводы | жиры
         calories = parseFloat(parts[1]) || 0;
         protein = parseFloat(parts[2]) || 0;
         carbs = parseFloat(parts[3]) || 0;
         fats = parseFloat(parts[4]) || 0;
       } else {
-        // Пытаемся найти калорийность через food-recognition-service
-        // Пока просто используем примерные значения
-        await ctx.reply("Поиск калорийности в разработке. Пожалуйста, укажите калории вручную в формате:\n`Название | калории | белки | углеводы | жиры`");
-        return;
+        // Только название — ищем БЖУ через API (Open Food Facts, USDA, примерные значения)
+        try {
+          const nutritionResponse = await axios.get(`${foodRecognitionServiceUrl}/nutrition`, {
+            params: { query: dishName.trim() },
+            timeout: 15000
+          });
+          if (nutritionResponse.data?.success) {
+            dishName = nutritionResponse.data.dishName || dishName;
+            calories = nutritionResponse.data.calories ?? 0;
+            protein = nutritionResponse.data.protein ?? 0;
+            carbs = nutritionResponse.data.carbs ?? 0;
+            fats = nutritionResponse.data.fats ?? 0;
+            source = nutritionResponse.data.source || '';
+          }
+        } catch (apiError) {
+          console.error('Ошибка поиска БЖУ по названию:', apiError.message);
+          await ctx.reply(
+            "❌ Не удалось найти данные по этому блюду. Укажите БЖУ вручную в формате:\n`Название | калории | белки | углеводы | жиры`",
+            { parse_mode: 'Markdown' }
+          );
+          return;
+        }
       }
 
       const response = await axios.post(`${diaryServiceUrl}/diary/${chatId}/entries`, {
@@ -3157,21 +3176,22 @@ bot.on("text", async (ctx) => {
       });
 
       await setUserState(chatId, 0);
-      await ctx.reply(
-        `✅ Блюдо "${dishName}" добавлено в дневник!\n\n` +
+      let replyText = `✅ Блюдо "${dishName}" добавлено в дневник!\n\n` +
         `🔥 Калории: ${calories} ккал\n` +
         `🥗 Белки: ${protein}г\n` +
         `🍞 Углеводы: ${carbs}г\n` +
-        `🧈 Жиры: ${fats}г`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "📊 Дневник", callback_data: "diary_menu" }],
-              [{ text: "◀️ Главная", callback_data: "back_to_main" }]
-            ]
-          }
+        `🧈 Жиры: ${fats}г`;
+      if (source) {
+        replyText += `\n\n📚 Источник: ${source}`;
+      }
+      await ctx.reply(replyText, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "📊 Дневник", callback_data: "diary_menu" }],
+            [{ text: "◀️ Главная", callback_data: "back_to_main" }]
+          ]
         }
-      );
+      });
     } catch (error) {
       console.error('Ошибка добавления блюда:', error);
       await ctx.reply("❌ Ошибка добавления блюда. Попробуйте еще раз.");

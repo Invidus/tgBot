@@ -855,6 +855,45 @@ app.post('/recognize', async (req, res) => {
   }
 });
 
+// Поиск БЖУ по названию блюда (Open Food Facts, USDA, примерные значения)
+app.get('/nutrition', async (req, res) => {
+  try {
+    const query = (req.query.query || req.query.name || '').trim();
+    if (!query) {
+      return res.status(400).json({
+        success: false,
+        error: 'Укажите название блюда (query или name)'
+      });
+    }
+
+    console.log(`🔍 Поиск БЖУ по названию: "${query}"`);
+
+    let nutritionInfo;
+    try {
+      nutritionInfo = await getCalories(query);
+    } catch (err) {
+      console.warn(`⚠️ Ошибка getCalories для "${query}":`, err.message);
+      nutritionInfo = getEstimatedCalories(query);
+    }
+
+    res.json({
+      success: true,
+      dishName: nutritionInfo.productName || query,
+      calories: nutritionInfo.calories,
+      protein: nutritionInfo.protein ?? 0,
+      carbs: nutritionInfo.carbs ?? 0,
+      fats: nutritionInfo.fats ?? 0,
+      source: nutritionInfo.source || 'Примерные значения'
+    });
+  } catch (error) {
+    console.error('❌ Ошибка /nutrition:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Ошибка поиска БЖУ'
+    });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',

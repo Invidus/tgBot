@@ -3213,6 +3213,7 @@ bot.on("text", async (ctx) => {
         // Только название — ищем варианты и показываем первый с кнопками ✓ / ✗
         const searchQuery = dishName.trim();
         try {
+          await ctx.reply("🔍 Выполняю поиск в базе (Open Food Facts, USDA)...");
           const searchResponse = await axios.get(`${foodRecognitionServiceUrl}/nutrition/search`, {
             params: { query: searchQuery, limit: 5 },
             timeout: 15000

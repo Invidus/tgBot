@@ -2866,7 +2866,10 @@ bot.action("profile_gender_male", async (ctx) => {
   await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
   await ctx.reply("✅ Пол сохранен: Мужской\n\n2️⃣ Отправьте ваш возраст (число, например: 25)", {
     reply_markup: {
-      inline_keyboard: [[{ text: "❌ Отмена", callback_data: "diary_menu" }]]
+      inline_keyboard: [[
+        { text: "◀️ Назад", callback_data: "profile_step_back" },
+        { text: "❌ Отмена", callback_data: "diary_menu" }
+      ]]
     }
   });
 });
@@ -2882,9 +2885,92 @@ bot.action("profile_gender_female", async (ctx) => {
   await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
   await ctx.reply("✅ Пол сохранен: Женский\n\n2️⃣ Отправьте ваш возраст (число, например: 25)", {
     reply_markup: {
-      inline_keyboard: [[{ text: "❌ Отмена", callback_data: "diary_menu" }]]
+      inline_keyboard: [[
+        { text: "◀️ Назад", callback_data: "profile_step_back" },
+        { text: "❌ Отмена", callback_data: "diary_menu" }
+      ]]
     }
   });
+});
+
+// Возврат на предыдущий шаг в настройке профиля
+bot.action("profile_step_back", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+  const profileDataKey = `user:profile:${chatId}`;
+  const profileDataStr = await redis.get(profileDataKey);
+  if (!profileDataStr) {
+    await ctx.reply("❌ Данные профиля устарели. Начните настройку заново.", {
+      reply_markup: { inline_keyboard: [[{ text: "📊 Дневник", callback_data: "diary_menu" }]] }
+    });
+    return;
+  }
+  const profileData = JSON.parse(profileDataStr);
+  if (profileData.step <= 1) {
+    return;
+  }
+  profileData.step -= 1;
+  await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
+
+  const step = profileData.step;
+  if (step === 1) {
+    await ctx.reply("1️⃣ **Пол** — выберите кнопкой:", {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "👨 Мужской", callback_data: "profile_gender_male" },
+            { text: "👩 Женский", callback_data: "profile_gender_female" }
+          ],
+          [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+        ]
+      }
+    });
+  } else if (step === 2) {
+    await ctx.reply("2️⃣ Отправьте ваш возраст (число, например: 25)", {
+      reply_markup: {
+        inline_keyboard: [[
+          { text: "◀️ Назад", callback_data: "profile_step_back" },
+          { text: "❌ Отмена", callback_data: "diary_menu" }
+        ]]
+      }
+    });
+  } else if (step === 3) {
+    await ctx.reply("3️⃣ Отправьте ваш рост в см (например: 175)", {
+      reply_markup: {
+        inline_keyboard: [[
+          { text: "◀️ Назад", callback_data: "profile_step_back" },
+          { text: "❌ Отмена", callback_data: "diary_menu" }
+        ]]
+      }
+    });
+  } else if (step === 4) {
+    await ctx.reply("4️⃣ Отправьте ваш вес в кг (например: 70)", {
+      reply_markup: {
+        inline_keyboard: [[
+          { text: "◀️ Назад", callback_data: "profile_step_back" },
+          { text: "❌ Отмена", callback_data: "diary_menu" }
+        ]]
+      }
+    });
+  } else if (step === 5) {
+    await ctx.reply("5️⃣ **Образ жизни** — выберите кнопкой:", {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🪑 Малоподвижный", callback_data: "profile_activity_sedentary" }],
+          [{ text: "🚶 Легкая активность", callback_data: "profile_activity_light" }],
+          [{ text: "🏃 Умеренная активность", callback_data: "profile_activity_moderate" }],
+          [{ text: "💪 Высокая активность", callback_data: "profile_activity_active" }],
+          [{ text: "🔥 Очень высокая активность", callback_data: "profile_activity_very_active" }],
+          [
+            { text: "◀️ Назад", callback_data: "profile_step_back" },
+            { text: "❌ Отмена", callback_data: "diary_menu" }
+          ]
+        ]
+      }
+    });
+  }
 });
 
 // Общая функция сохранения профиля после выбора образа жизни
@@ -3181,7 +3267,12 @@ bot.on("text", async (ctx) => {
           profileData.step = 3;
           await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
           await ctx.reply(`✅ Возраст сохранен: ${age} лет\n\n3️⃣ Отправьте ваш рост в см (например: 175)`, {
-            reply_markup: { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "diary_menu" }]] }
+            reply_markup: {
+              inline_keyboard: [[
+                { text: "◀️ Назад", callback_data: "profile_step_back" },
+                { text: "❌ Отмена", callback_data: "diary_menu" }
+              ]]
+            }
           });
         }
       } else if (profileData.step === 3) {
@@ -3194,7 +3285,12 @@ bot.on("text", async (ctx) => {
           profileData.step = 4;
           await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
           await ctx.reply(`✅ Рост сохранен: ${height} см\n\n4️⃣ Отправьте ваш вес в кг (например: 70)`, {
-            reply_markup: { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "diary_menu" }]] }
+            reply_markup: {
+              inline_keyboard: [[
+                { text: "◀️ Назад", callback_data: "profile_step_back" },
+                { text: "❌ Отмена", callback_data: "diary_menu" }
+              ]]
+            }
           });
         }
       } else if (profileData.step === 4) {
@@ -3217,7 +3313,10 @@ bot.on("text", async (ctx) => {
                   [{ text: "🏃 Умеренная активность", callback_data: "profile_activity_moderate" }],
                   [{ text: "💪 Высокая активность", callback_data: "profile_activity_active" }],
                   [{ text: "🔥 Очень высокая активность", callback_data: "profile_activity_very_active" }],
-                  [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+                  [
+                    { text: "◀️ Назад", callback_data: "profile_step_back" },
+                    { text: "❌ Отмена", callback_data: "diary_menu" }
+                  ]
                 ]
               }
             }
@@ -3233,7 +3332,10 @@ bot.on("text", async (ctx) => {
               [{ text: "🏃 Умеренная активность", callback_data: "profile_activity_moderate" }],
               [{ text: "💪 Высокая активность", callback_data: "profile_activity_active" }],
               [{ text: "🔥 Очень высокая активность", callback_data: "profile_activity_very_active" }],
-              [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+              [
+                { text: "◀️ Назад", callback_data: "profile_step_back" },
+                { text: "❌ Отмена", callback_data: "diary_menu" }
+              ]
             ]
           }
         });

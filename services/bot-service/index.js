@@ -2830,32 +2830,125 @@ bot.action("diary_setup_profile", async (ctx) => {
     return;
   }
 
-  // Устанавливаем состояние для ввода профиля
-  await setUserState(chatId, 10); // Состояние 10 - ввод профиля
+  // Устанавливаем состояние для ввода профиля и начальные данные
+  await setUserState(chatId, 10);
+  const profileDataKey = `user:profile:${chatId}`;
+  await redis.setex(profileDataKey, 3600, JSON.stringify({ step: 1 }));
 
   await ctx.reply(
     "⚙️ **Настройка профиля**\n\n" +
-    "Для расчета вашей суточной нормы калорий мне нужны следующие данные:\n\n" +
-    "1️⃣ **Пол** - отправьте: мужской или женский\n" +
-    "2️⃣ **Возраст** - отправьте число (например: 25)\n" +
-    "3️⃣ **Рост** - отправьте в см (например: 175)\n" +
-    "4️⃣ **Вес** - отправьте в кг (например: 70)\n" +
-    "5️⃣ **Образ жизни** - выберите один из вариантов:\n" +
-    "   • Малоподвижный (сидячая работа, минимум активности)\n" +
-    "   • Легкая активность (тренировки 1-3 раза в неделю)\n" +
-    "   • Умеренная активность (тренировки 3-5 раз в неделю)\n" +
-    "   • Высокая активность (тренировки 6-7 раз в неделю)\n" +
-    "   • Очень высокая активность (физическая работа)\n\n" +
-    "Отправляйте данные по одному, я буду запоминать их.",
+    "Для расчета суточной нормы калорий нужны следующие данные.\n\n" +
+    "1️⃣ **Пол** — выберите кнопкой:",
     {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
+          [
+            { text: "👨 Мужской", callback_data: "profile_gender_male" },
+            { text: "👩 Женский", callback_data: "profile_gender_female" }
+          ],
           [{ text: "❌ Отмена", callback_data: "diary_menu" }]
         ]
       }
     }
   );
+});
+
+// Выбор пола в профиле (кнопки)
+bot.action("profile_gender_male", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+  const profileDataKey = `user:profile:${chatId}`;
+  const profileDataStr = await redis.get(profileDataKey);
+  const profileData = profileDataStr ? JSON.parse(profileDataStr) : { step: 1 };
+  profileData.gender = 'male';
+  profileData.step = 2;
+  await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
+  await ctx.reply("✅ Пол сохранен: Мужской\n\n2️⃣ Отправьте ваш возраст (число, например: 25)", {
+    reply_markup: {
+      inline_keyboard: [[{ text: "❌ Отмена", callback_data: "diary_menu" }]]
+    }
+  });
+});
+
+bot.action("profile_gender_female", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+  const profileDataKey = `user:profile:${chatId}`;
+  const profileDataStr = await redis.get(profileDataKey);
+  const profileData = profileDataStr ? JSON.parse(profileDataStr) : { step: 1 };
+  profileData.gender = 'female';
+  profileData.step = 2;
+  await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
+  await ctx.reply("✅ Пол сохранен: Женский\n\n2️⃣ Отправьте ваш возраст (число, например: 25)", {
+    reply_markup: {
+      inline_keyboard: [[{ text: "❌ Отмена", callback_data: "diary_menu" }]]
+    }
+  });
+});
+
+// Общая функция сохранения профиля после выбора образа жизни
+const saveProfileWithActivity = async (ctx, chatId, activityLevel) => {
+  const profileDataKey = `user:profile:${chatId}`;
+  const profileDataStr = await redis.get(profileDataKey);
+  if (!profileDataStr) {
+    await ctx.reply("❌ Данные профиля устарели. Начните настройку заново.", {
+      reply_markup: { inline_keyboard: [[{ text: "📊 Дневник", callback_data: "diary_menu" }]] }
+    });
+    return;
+  }
+  const profileData = JSON.parse(profileDataStr);
+  profileData.activityLevel = activityLevel;
+
+  const response = await axios.post(`${diaryServiceUrl}/profiles/${chatId}`, {
+    gender: profileData.gender,
+    age: profileData.age,
+    height: profileData.height,
+    weight: profileData.weight,
+    activityLevel: profileData.activityLevel
+  }, { timeout: 10000 });
+
+  await redis.del(profileDataKey);
+  await setUserState(chatId, 0);
+
+  const profile = response.data.profile;
+  let message = "✅ **Профиль успешно сохранен!**\n\n";
+  message += `🎯 **Ваши цели по калориям:**\n`;
+  message += `• Сброс веса: ${profile.calorieGoals.weight_loss} ккал\n`;
+  message += `• Поддержание: ${profile.calorieGoals.weight_maintenance} ккал\n`;
+  message += `• Набор массы: ${profile.calorieGoals.muscle_gain} ккал\n\n`;
+  message += "Теперь вы можете использовать дневник питания!";
+
+  await ctx.reply(message, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "📊 Открыть дневник", callback_data: "diary_menu" }],
+        [{ text: "◀️ Главная", callback_data: "back_to_main" }]
+      ]
+    }
+  });
+};
+
+bot.action("profile_activity_sedentary", async (ctx) => {
+  await ctx.answerCbQuery();
+  await saveProfileWithActivity(ctx, ctx.chat.id, 'sedentary');
+});
+bot.action("profile_activity_light", async (ctx) => {
+  await ctx.answerCbQuery();
+  await saveProfileWithActivity(ctx, ctx.chat.id, 'light');
+});
+bot.action("profile_activity_moderate", async (ctx) => {
+  await ctx.answerCbQuery();
+  await saveProfileWithActivity(ctx, ctx.chat.id, 'moderate');
+});
+bot.action("profile_activity_active", async (ctx) => {
+  await ctx.answerCbQuery();
+  await saveProfileWithActivity(ctx, ctx.chat.id, 'active');
+});
+bot.action("profile_activity_very_active", async (ctx) => {
+  await ctx.answerCbQuery();
+  await saveProfileWithActivity(ctx, ctx.chat.id, 'very_active');
 });
 
 // Обработчик добавления блюда
@@ -3066,20 +3159,18 @@ bot.on("text", async (ctx) => {
 
     try {
       if (profileData.step === 1) {
-        // Ввод пола
-        if (lowerText.includes('муж') || lowerText.includes('male') || lowerText === 'м') {
-          profileData.gender = 'male';
-          profileData.step = 2;
-          await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
-          await ctx.reply("✅ Пол сохранен: Мужской\n\n2️⃣ Отправьте ваш возраст (число, например: 25)");
-        } else if (lowerText.includes('жен') || lowerText.includes('female') || lowerText === 'ж') {
-          profileData.gender = 'female';
-          profileData.step = 2;
-          await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
-          await ctx.reply("✅ Пол сохранен: Женский\n\n2️⃣ Отправьте ваш возраст (число, например: 25)");
-        } else {
-          await ctx.reply("❌ Пожалуйста, укажите пол: мужской или женский");
-        }
+        // Пол — только кнопками
+        await ctx.reply("Пожалуйста, выберите пол кнопкой ниже 👇", {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "👨 Мужской", callback_data: "profile_gender_male" },
+                { text: "👩 Женский", callback_data: "profile_gender_female" }
+              ],
+              [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+            ]
+          }
+        });
       } else if (profileData.step === 2) {
         // Ввод возраста
         const age = parseInt(text);
@@ -3089,7 +3180,9 @@ bot.on("text", async (ctx) => {
           profileData.age = age;
           profileData.step = 3;
           await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
-          await ctx.reply(`✅ Возраст сохранен: ${age} лет\n\n3️⃣ Отправьте ваш рост в см (например: 175)`);
+          await ctx.reply(`✅ Возраст сохранен: ${age} лет\n\n3️⃣ Отправьте ваш рост в см (например: 175)`, {
+            reply_markup: { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "diary_menu" }]] }
+          });
         }
       } else if (profileData.step === 3) {
         // Ввод роста
@@ -3100,7 +3193,9 @@ bot.on("text", async (ctx) => {
           profileData.height = height;
           profileData.step = 4;
           await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
-          await ctx.reply(`✅ Рост сохранен: ${height} см\n\n4️⃣ Отправьте ваш вес в кг (например: 70)`);
+          await ctx.reply(`✅ Рост сохранен: ${height} см\n\n4️⃣ Отправьте ваш вес в кг (например: 70)`, {
+            reply_markup: { inline_keyboard: [[{ text: "❌ Отмена", callback_data: "diary_menu" }]] }
+          });
         }
       } else if (profileData.step === 4) {
         // Ввод веса
@@ -3112,67 +3207,36 @@ bot.on("text", async (ctx) => {
           profileData.step = 5;
           await redis.setex(profileDataKey, 3600, JSON.stringify(profileData));
           await ctx.reply(
-            `✅ Вес сохранен: ${weight} кг\n\n5️⃣ Выберите ваш образ жизни:\n` +
-            `• Малоподвижный\n` +
-            `• Легкая активность\n` +
-            `• Умеренная активность\n` +
-            `• Высокая активность\n` +
-            `• Очень высокая активность`
+            `✅ Вес сохранен: ${weight} кг\n\n5️⃣ **Образ жизни** — выберите кнопкой:`,
+            {
+              parse_mode: 'Markdown',
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: "🪑 Малоподвижный", callback_data: "profile_activity_sedentary" }],
+                  [{ text: "🚶 Легкая активность", callback_data: "profile_activity_light" }],
+                  [{ text: "🏃 Умеренная активность", callback_data: "profile_activity_moderate" }],
+                  [{ text: "💪 Высокая активность", callback_data: "profile_activity_active" }],
+                  [{ text: "🔥 Очень высокая активность", callback_data: "profile_activity_very_active" }],
+                  [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+                ]
+              }
+            }
           );
         }
       } else if (profileData.step === 5) {
-        // Ввод образа жизни
-        let activityLevel = null;
-        if (lowerText.includes('малоподвиж') || lowerText.includes('сидяч')) {
-          activityLevel = 'sedentary';
-        } else if (lowerText.includes('легк') && lowerText.includes('актив')) {
-          activityLevel = 'light';
-        } else if (lowerText.includes('умерен') && lowerText.includes('актив')) {
-          activityLevel = 'moderate';
-        } else if (lowerText.includes('высок') && lowerText.includes('актив') && !lowerText.includes('очень')) {
-          activityLevel = 'active';
-        } else if (lowerText.includes('очень') || (lowerText.includes('высок') && lowerText.includes('актив'))) {
-          activityLevel = 'very_active';
-        }
-
-        if (!activityLevel) {
-          await ctx.reply("❌ Пожалуйста, выберите один из вариантов образа жизни");
-        } else {
-          profileData.activityLevel = activityLevel;
-
-          // Сохраняем профиль
-          const response = await axios.post(`${diaryServiceUrl}/profiles/${chatId}`, {
-            gender: profileData.gender,
-            age: profileData.age,
-            height: profileData.height,
-            weight: profileData.weight,
-            activityLevel: profileData.activityLevel
-          }, {
-            timeout: 10000
-          });
-
-          // Удаляем временные данные
-          await redis.del(profileDataKey);
-          await setUserState(chatId, 0);
-
-          const profile = response.data.profile;
-          let message = "✅ **Профиль успешно сохранен!**\n\n";
-          message += `🎯 **Ваши цели по калориям:**\n`;
-          message += `• Сброс веса: ${profile.calorieGoals.weight_loss} ккал\n`;
-          message += `• Поддержание: ${profile.calorieGoals.weight_maintenance} ккал\n`;
-          message += `• Набор массы: ${profile.calorieGoals.muscle_gain} ккал\n\n`;
-          message += "Теперь вы можете использовать дневник питания!";
-
-          await ctx.reply(message, {
-            parse_mode: 'Markdown',
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "📊 Открыть дневник", callback_data: "diary_menu" }],
-                [{ text: "◀️ Главная", callback_data: "back_to_main" }]
-              ]
-            }
-          });
-        }
+        // Образ жизни — только кнопками; если прислали текст, подсказываем
+        await ctx.reply("Пожалуйста, выберите образ жизни кнопкой ниже 👇", {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🪑 Малоподвижный", callback_data: "profile_activity_sedentary" }],
+              [{ text: "🚶 Легкая активность", callback_data: "profile_activity_light" }],
+              [{ text: "🏃 Умеренная активность", callback_data: "profile_activity_moderate" }],
+              [{ text: "💪 Высокая активность", callback_data: "profile_activity_active" }],
+              [{ text: "🔥 Очень высокая активность", callback_data: "profile_activity_very_active" }],
+              [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+            ]
+          }
+        });
       }
     } catch (error) {
       console.error('Ошибка сохранения профиля:', error);

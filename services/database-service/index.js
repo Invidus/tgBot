@@ -257,11 +257,37 @@ app.get('/favorites/check/:chatId', async (req, res) => {
   }
 });
 
-// Добавление в избранное
+const FAVORITES_MAX_PER_USER = 10;
+
+// Добавление в избранное (максимум 10 рецептов на пользователя)
 app.post('/favorites/add', async (req, res) => {
   const { chatId, url, title, text, dishType, hasPhoto, photoFileId } = req.body;
 
+  if (!chatId || !url) {
+    return res.status(400).json({ error: 'Не указаны chatId или url' });
+  }
+
   try {
+    const countResult = await pool.query(
+      'SELECT COUNT(*) AS count FROM favorites WHERE chat_id = $1',
+      [chatId]
+    );
+    const count = parseInt(countResult.rows[0].count, 10) || 0;
+
+    const existsResult = await pool.query(
+      'SELECT id FROM favorites WHERE chat_id = $1 AND recipe_url = $2',
+      [chatId, url]
+    );
+    const alreadyInFavorites = existsResult.rows.length > 0;
+
+    if (count >= FAVORITES_MAX_PER_USER && !alreadyInFavorites) {
+      return res.status(400).json({
+        added: false,
+        error: 'limit',
+        message: 'В избранном может быть не более 10 рецептов. Удалите один из сохранённых, чтобы добавить новый.'
+      });
+    }
+
     const result = await pool.query(
       `INSERT INTO favorites (chat_id, recipe_url, recipe_title, recipe_text, dish_type, has_photo, photo_file_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)

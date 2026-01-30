@@ -307,11 +307,16 @@ const addToFavorites = async (chatId, data) => {
     });
     return response.data.added || false;
   } catch (error) {
+    if (error.response?.status === 400 && error.response?.data?.error === 'limit') {
+      const err = new Error(error.response.data.message || 'В избранном может быть не более 10 рецептов.');
+      err.limitReached = true;
+      throw err;
+    }
     console.error('Ошибка добавления в избранное:', error.message);
     if (error.response) {
       console.error('Детали ошибки:', error.response.data);
     }
-    return false;
+    throw error;
   }
 };
 
@@ -1251,6 +1256,11 @@ bot.action("add_to_favorites", async (ctx) => {
       await ctx.answerCbQuery("Рецепт уже в избранном");
     }
   } catch (error) {
+    if (error.limitReached) {
+      await ctx.answerCbQuery("❌ Лимит избранного");
+      await ctx.reply(error.message || "В избранном может быть не более 10 рецептов. Удалите один из сохранённых, чтобы добавить новый.");
+      return;
+    }
     console.error('Ошибка при добавлении в избранное:', error);
     await ctx.answerCbQuery("❌ Ошибка при добавлении в избранное");
     return;

@@ -30,6 +30,7 @@ if (envPath) {
 
 export const config = {
   telegramToken: process.env.TELEGRAM_TOKEN,
+  botUsername: process.env.BOT_USERNAME || '', // для реферальной ссылки (без @)
   foodUrl: process.env.FOOD_URL || "https://1000.menu/catalog/na-zavtrak",
   dinnerUrl: process.env.DINNER_URL || "https://1000.menu/catalog/pp-obed",
   lunchUrl: process.env.LUNCH_URL || "https://1000.menu/catalog/zvanji-uzhin",

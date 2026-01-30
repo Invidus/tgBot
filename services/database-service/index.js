@@ -169,6 +169,19 @@ const initTables = async () => {
       END $$;
     `).catch(() => {}); // Игнорируем ошибку если колонка уже есть
 
+    // Добавляем колонку referrer_chat_id для реферальной системы
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name='users' AND column_name='referrer_chat_id'
+        ) THEN
+          ALTER TABLE users ADD COLUMN referrer_chat_id BIGINT NULL;
+        END IF;
+      END $$;
+    `).catch(() => {});
+
     // Создаем таблицу для истории ИИ запросов (для дневных лимитов)
     console.log('🔄 Создание таблицы ai_requests_history...');
     await pool.query(`
@@ -650,7 +663,7 @@ app.get('/payments', async (req, res) => {
 
 // Получение или создание пользователя
 app.post('/users', async (req, res) => {
-  const { chatId, username } = req.body;
+  const { chatId, username, referrer_chat_id: referrerChatId } = req.body;
 
   if (!chatId) {
     return res.status(400).json({ error: 'Не указан chatId' });
@@ -664,7 +677,7 @@ app.post('/users', async (req, res) => {
     );
 
     if (existingUser.rows.length > 0) {
-      // Обновляем username, если он изменился
+      // Обновляем username, если он изменился (referrer не меняем)
       if (username && existingUser.rows[0].username !== username) {
         const updated = await pool.query(
           'UPDATE users SET username = $1, updated_at = CURRENT_TIMESTAMP WHERE chat_id = $2 RETURNING *',
@@ -675,12 +688,12 @@ app.post('/users', async (req, res) => {
       return res.json({ user: existingUser.rows[0] });
     }
 
-    // Создаем нового пользователя
+    // Создаем нового пользователя (referrer только при первом создании)
     const result = await pool.query(
-      `INSERT INTO users (chat_id, username, free_requests)
-       VALUES ($1, $2, 0)
+      `INSERT INTO users (chat_id, username, free_requests, referrer_chat_id)
+       VALUES ($1, $2, 0, $3)
        RETURNING *`,
-      [chatId, username || null]
+      [chatId, username || null, referrerChatId || null]
     );
 
     res.json({ user: result.rows[0] });
@@ -700,6 +713,54 @@ app.get('/users/chat/:chatId', async (req, res) => {
     res.json({ user: result.rows[0] || null });
   } catch (error) {
     console.error('Ошибка получения пользователя:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
+// Реферальная статистика и скидки для оплаты
+// Скидка приглашающего: 1 пригл. = 5%, 2 = 10%, 3 = 20%, 4 = 30%, 5+ = 50%
+// Приглашённый: 10% на первую покупку (месяц/полгода/год)
+app.get('/users/chat/:chatId/referral-stats', async (req, res) => {
+  const chatId = req.params.chatId;
+  try {
+    const userResult = await pool.query(
+      'SELECT referrer_chat_id FROM users WHERE chat_id = $1',
+      [chatId]
+    );
+    const user = userResult.rows[0] || null;
+
+    const referredCountResult = await pool.query(
+      'SELECT COUNT(*) AS count FROM users WHERE referrer_chat_id = $1',
+      [chatId]
+    );
+    const referredCount = parseInt(referredCountResult.rows[0].count, 10) || 0;
+
+    let referrerDiscountPercent = 0;
+    if (referredCount >= 5) referrerDiscountPercent = 50;
+    else if (referredCount >= 4) referrerDiscountPercent = 30;
+    else if (referredCount >= 3) referrerDiscountPercent = 20;
+    else if (referredCount >= 2) referrerDiscountPercent = 10;
+    else if (referredCount >= 1) referrerDiscountPercent = 5;
+
+    const paidCountResult = await pool.query(
+      "SELECT COUNT(*) AS count FROM payments WHERE chat_id = $1 AND status = 'succeeded'",
+      [chatId]
+    );
+    const hasEverPaid = parseInt(paidCountResult.rows[0].count, 10) > 0;
+    const isReferredFirstPurchase = user && user.referrer_chat_id != null && !hasEverPaid;
+    const referredDiscountPercent = isReferredFirstPurchase ? 10 : 0;
+
+    const finalDiscountPercent = Math.max(referrerDiscountPercent, referredDiscountPercent);
+
+    res.json({
+      referredCount,
+      referrerDiscountPercent,
+      isReferredFirstPurchase,
+      referredDiscountPercent,
+      finalDiscountPercent
+    });
+  } catch (error) {
+    console.error('Ошибка получения реферальной статистики:', error);
     res.status(500).json({ error: 'Ошибка БД' });
   }
 });

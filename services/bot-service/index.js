@@ -355,13 +355,12 @@ const hasActiveSubscription = async (chatId) => {
   return endDate > now && subscription.is_active;
 };
 
-// Получение или создание пользователя
-const getOrCreateUser = async (chatId, username = null) => {
+// Получение или создание пользователя (referrer_chat_id только при первом создании)
+const getOrCreateUser = async (chatId, username = null, referrerChatId = null) => {
   try {
-    const response = await axios.post(`${databaseServiceUrl}/users`, {
-      chatId,
-      username
-    }, {
+    const body = { chatId, username };
+    if (referrerChatId != null) body.referrer_chat_id = referrerChatId;
+    const response = await axios.post(`${databaseServiceUrl}/users`, body, {
       timeout: 10000,
       headers: { 'Content-Type': 'application/json' }
     });
@@ -382,6 +381,19 @@ const getUserByChatId = async (chatId) => {
   } catch (error) {
     console.error('Ошибка получения пользователя:', error.message);
     return null;
+  }
+};
+
+// Реферальная скидка для оплаты (приглашающий: 1=5%, 2=10%, 3=20%, 4=30%, 5+=50%; приглашённый: 10% на первую покупку)
+const getReferralDiscountPercent = async (chatId) => {
+  try {
+    const response = await axios.get(`${databaseServiceUrl}/users/chat/${chatId}/referral-stats`, {
+      timeout: 10000
+    });
+    return response.data.finalDiscountPercent || 0;
+  } catch (error) {
+    console.error('Ошибка получения реферальной скидки:', error.message);
+    return 0;
   }
 };
 
@@ -521,16 +533,23 @@ const getExpiringSubscriptions = async (days = 3) => {
   }
 };
 
-// Обработчик команды /start
+// Обработчик команды /start (реферальная ссылка: t.me/bot?start=ref_123456789)
 bot.start(async (ctx) => {
   const chatId = ctx.chat.id;
   const username = ctx.from?.username;
+  const startPayload = ctx.startPayload || '';
 
   await setUserState(chatId, 0);
 
-  // Создаем или обновляем пользователя в базе
+  let referrerChatId = null;
+  if (startPayload.startsWith('ref_')) {
+    const refId = startPayload.slice(4).trim();
+    if (/^\d+$/.test(refId)) referrerChatId = parseInt(refId, 10);
+  }
+
+  // Создаем или обновляем пользователя в базе (referrer только для нового пользователя)
   try {
-    await getOrCreateUser(chatId, username);
+    await getOrCreateUser(chatId, username, referrerChatId);
   } catch (error) {
     console.error('Ошибка при создании пользователя:', error);
   }
@@ -4129,6 +4148,27 @@ bot.action("subscription_menu", async (ctx) => {
     message += `Выберите период подписки:`;
   }
 
+  // Реферальная программа: скидка за приглашённых; приглашённым — 10% на первую покупку
+  try {
+    const refStatsRes = await axios.get(`${databaseServiceUrl}/users/chat/${chatId}/referral-stats`, { timeout: 10000 });
+    const refStats = refStatsRes.data;
+    if (refStats.referredCount > 0) {
+      message += `\n\n🎁 **Реферальная скидка:** приглашено ${refStats.referredCount} — скидка ${refStats.referrerDiscountPercent}% на подписку`;
+    }
+    if (refStats.isReferredFirstPurchase) {
+      message += `\n\n🎁 **Вам 10% скидка** на первую покупку (вы пришли по приглашению)`;
+    }
+    const botInfo = await ctx.telegram.getMe();
+    const botUsername = (botInfo && botInfo.username) ? botInfo.username : config.botUsername;
+    if (botUsername) {
+      const refLink = `https://t.me/${botUsername}?start=ref_${chatId}`;
+      message += `\n\n🔗 **Ваша реферальная ссылка:**\n\`${refLink}\`\n\n`;
+      message += `Приглашайте друзей: 1 пригл. = 5%, 2 = 10%, 3 = 20%, 4 = 30%, 5+ = 50%. Друзьям — 10% на первую покупку.`;
+    }
+  } catch (e) {
+    // Реферальная блок не критичен
+  }
+
   const keyboard = getSubscriptionKeyboard();
   await ctx.reply(message, { parse_mode: 'Markdown', ...keyboard });
 });
@@ -4138,7 +4178,7 @@ bot.action("subscribe_month", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
 
   const chatId = ctx.chat.id;
-  const price = 300;
+  const basePrice = 300;
   const months = 1;
   const subscriptionType = 'month';
 
@@ -4150,35 +4190,39 @@ bot.action("subscribe_month", async (ctx) => {
   }
 
   try {
-    // Создаем уникальный ID платежа
-    const paymentId = randomUUID();
+    const discountPercent = await getReferralDiscountPercent(chatId);
+    const finalAmount = Math.round(basePrice * (1 - discountPercent / 100));
+    const amountKopeks = Math.max(100, finalAmount * 100); // минимум 1₽ в ЮKassa
 
-    // Проверяем длину payload (должен быть до 128 байт)
+    const paymentId = randomUUID();
     if (Buffer.byteLength(paymentId, 'utf8') > 128) {
       throw new Error('Payload слишком длинный (максимум 128 байт)');
     }
 
-    // Создаем запись о платеже в БД
     await axios.post(`${databaseServiceUrl}/payments`, {
       chatId,
       paymentId,
       subscriptionType,
       months,
-      amount: price
+      amount: finalAmount
     }, {
       timeout: 10000,
       headers: { 'Content-Type': 'application/json' }
     }).catch(err => console.error('Ошибка создания записи о платеже:', err));
 
-    // Отправляем счет через Telegram Payments API
+    let description = `Подписка включает:\n• Неограниченный доступ к рецептам\n• Распознавание блюд по фото (5/день)\n• Подсчет калорий и БЖУ`;
+    if (discountPercent > 0) {
+      description += `\n\n🎁 Скидка ${discountPercent}%: ${basePrice}₽ → ${finalAmount}₽`;
+    }
+
     const invoiceData = {
       title: `Подписка на ${months} ${months === 1 ? 'месяц' : 'месяца'}`,
-      description: `Подписка включает:\n• Неограниченный доступ к рецептам\n• Распознавание блюд по фото (5/день)\n• Подсчет калорий и БЖУ`,
+      description,
       payload: paymentId,
       provider_token: config.telegramPayment.providerToken,
       currency: 'RUB',
       prices: [
-        { label: 'Подписка', amount: price * 100 } // Сумма в копейках
+        { label: 'Подписка', amount: amountKopeks }
       ]
     };
 
@@ -4223,12 +4267,11 @@ bot.action("subscribe_half_year", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
 
   const chatId = ctx.chat.id;
-  const pricePerMonth = 270; // 300 - 10%
+  const pricePerMonth = 270; // базовая цена за месяц (уже -10% за период)
   const months = 6;
-  const totalPrice = pricePerMonth * months;
+  const basePrice = pricePerMonth * months;
   const subscriptionType = 'half_year';
 
-  // Проверяем наличие provider_token
   if (!config.telegramPayment.providerToken) {
     console.error('TELEGRAM_PAYMENT_PROVIDER_TOKEN не установлен');
     await ctx.reply("❌ Платежи не настроены. Обратитесь к администратору.");
@@ -4236,35 +4279,39 @@ bot.action("subscribe_half_year", async (ctx) => {
   }
 
   try {
-    // Создаем уникальный ID платежа
-    const paymentId = randomUUID();
+    const discountPercent = await getReferralDiscountPercent(chatId);
+    const finalAmount = Math.round(basePrice * (1 - discountPercent / 100));
+    const amountKopeks = Math.max(100, finalAmount * 100);
 
-    // Проверяем длину payload (должен быть до 128 байт)
+    const paymentId = randomUUID();
     if (Buffer.byteLength(paymentId, 'utf8') > 128) {
       throw new Error('Payload слишком длинный (максимум 128 байт)');
     }
 
-    // Создаем запись о платеже в БД
     await axios.post(`${databaseServiceUrl}/payments`, {
       chatId,
       paymentId,
       subscriptionType,
       months,
-      amount: totalPrice
+      amount: finalAmount
     }, {
       timeout: 10000,
       headers: { 'Content-Type': 'application/json' }
     }).catch(err => console.error('Ошибка создания записи о платеже:', err));
 
-    // Отправляем счет через Telegram Payments API
+    let description = `Подписка включает: неограниченный доступ к рецептам, распознавание блюд по фото (5/день), подсчет калорий. ${pricePerMonth}₽/мес`;
+    if (discountPercent > 0) {
+      description += `\n\n🎁 Скидка ${discountPercent}%: ${basePrice}₽ → ${finalAmount}₽`;
+    }
+
     const invoiceData = {
-      title: `Подписка на ${months} месяцев (скидка 10%)`,
-      description: `Подписка включает: неограниченный доступ к рецептам, распознавание блюд по фото (5/день), подсчет калорий. ${pricePerMonth}₽/мес (скидка 10%)`,
+      title: `Подписка на ${months} мес.`,
+      description,
       payload: paymentId,
       provider_token: config.telegramPayment.providerToken,
       currency: 'RUB',
       prices: [
-        { label: 'Подписка', amount: totalPrice * 100 } // Сумма в копейках
+        { label: 'Подписка', amount: amountKopeks }
       ]
     };
 
@@ -4309,12 +4356,11 @@ bot.action("subscribe_year", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
 
   const chatId = ctx.chat.id;
-  const pricePerMonth = 240; // 300 - 20%
+  const pricePerMonth = 240; // базовая цена за месяц (уже -20% за период)
   const months = 12;
-  const totalPrice = pricePerMonth * months;
+  const basePrice = pricePerMonth * months;
   const subscriptionType = 'year';
 
-  // Проверяем наличие provider_token
   if (!config.telegramPayment.providerToken) {
     console.error('TELEGRAM_PAYMENT_PROVIDER_TOKEN не установлен');
     await ctx.reply("❌ Платежи не настроены. Обратитесь к администратору.");
@@ -4322,35 +4368,39 @@ bot.action("subscribe_year", async (ctx) => {
   }
 
   try {
-    // Создаем уникальный ID платежа
-    const paymentId = randomUUID();
+    const discountPercent = await getReferralDiscountPercent(chatId);
+    const finalAmount = Math.round(basePrice * (1 - discountPercent / 100));
+    const amountKopeks = Math.max(100, finalAmount * 100);
 
-    // Проверяем длину payload (должен быть до 128 байт)
+    const paymentId = randomUUID();
     if (Buffer.byteLength(paymentId, 'utf8') > 128) {
       throw new Error('Payload слишком длинный (максимум 128 байт)');
     }
 
-    // Создаем запись о платеже в БД
     await axios.post(`${databaseServiceUrl}/payments`, {
       chatId,
       paymentId,
       subscriptionType,
       months,
-      amount: totalPrice
+      amount: finalAmount
     }, {
       timeout: 10000,
       headers: { 'Content-Type': 'application/json' }
     }).catch(err => console.error('Ошибка создания записи о платеже:', err));
 
-    // Отправляем счет через Telegram Payments API
+    let description = `Подписка включает: неограниченный доступ к рецептам, распознавание блюд по фото (5/день), подсчет калорий. ${pricePerMonth}₽/мес`;
+    if (discountPercent > 0) {
+      description += `\n\n🎁 Скидка ${discountPercent}%: ${basePrice}₽ → ${finalAmount}₽`;
+    }
+
     const invoiceData = {
-      title: `Подписка на ${months} месяцев (скидка 20%)`,
-      description: `Подписка включает: неограниченный доступ к рецептам, распознавание блюд по фото (5/день), подсчет калорий. ${pricePerMonth}₽/мес (скидка 20%)`,
+      title: `Подписка на ${months} мес.`,
+      description,
       payload: paymentId,
       provider_token: config.telegramPayment.providerToken,
       currency: 'RUB',
       prices: [
-        { label: 'Подписка', amount: totalPrice * 100 } // Сумма в копейках
+        { label: 'Подписка', amount: amountKopeks }
       ]
     };
 

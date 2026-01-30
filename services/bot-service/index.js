@@ -1532,10 +1532,11 @@ bot.action("diary_back_to_recipe", async (ctx) => {
   await deleteMessageAndShowRecipe(ctx);
 });
 
-// Отмена «Добавить в дневник» из рецепта: удалить сообщение «Найдено» и вернуться к поиску рецепта
+// Отмена «Добавить в дневник» из рецепта: только удалить сообщение «Найдено», рецепт остаётся в чате выше
 bot.action("diary_cancel_from_recipe", async (ctx) => {
   await ctx.answerCbQuery();
-  await deleteMessageAndShowRecipe(ctx);
+  const chatId = ctx.chat.id;
+  await ctx.telegram.deleteMessage(chatId, ctx.callbackQuery.message.message_id).catch(() => {});
 });
 
 // Обработчик "Другое блюдо"
@@ -3340,6 +3341,8 @@ bot.action("diary_confirm_food", async (ctx) => {
 bot.action("diary_reject_food", async (ctx) => {
   await ctx.answerCbQuery();
   const chatId = ctx.chat.id;
+  const state = await getUserState(chatId);
+  const cancelCallback = (state === 1 || state === 2 || state === 3 || state === 4) ? "diary_cancel_from_recipe" : "diary_menu";
 
   const pendingKey = `user:diary_pending:${chatId}`;
   const pendingStr = await redis.get(pendingKey);
@@ -3365,7 +3368,7 @@ bot.action("diary_reject_food", async (ctx) => {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+            [{ text: "❌ Отмена", callback_data: cancelCallback }]
           ]
         }
       }
@@ -3383,29 +3386,22 @@ bot.action("diary_reject_food", async (ctx) => {
     `🧈 Жиры: ${item.fats}г\n\n` +
     `📚 Источник: ${item.source || '—'}\n\n` +
     `Добавить в дневник?\n\nНажмите кнопку обновить, чтобы продолжить поиск`;
+  const cancelKeyboard = {
+    inline_keyboard: [
+      [
+        { text: "✅", callback_data: "diary_confirm_food" },
+        { text: "🔄", callback_data: "diary_reject_food" }
+      ],
+      [{ text: "❌ Отмена", callback_data: cancelCallback }]
+    ]
+  };
   await ctx.editMessageText(msg, {
     parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: "✅", callback_data: "diary_confirm_food" },
-          { text: "🔄", callback_data: "diary_reject_food" }
-        ],
-        [{ text: "❌ Отмена", callback_data: "diary_menu" }]
-      ]
-    }
+    reply_markup: cancelKeyboard
   }).catch(async () => {
     await ctx.reply(msg, {
       parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "✅", callback_data: "diary_confirm_food" },
-            { text: "🔄", callback_data: "diary_reject_food" }
-          ],
-          [{ text: "❌ Отмена", callback_data: "diary_menu" }]
-        ]
-      }
+      reply_markup: cancelKeyboard
     });
   });
 });

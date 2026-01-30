@@ -1381,7 +1381,11 @@ bot.action("add_to_diary_from_recipe", async (ctx) => {
     return;
   }
 
-  await ctx.reply("🔍 Выполняю поиск в базе (Open Food Facts, USDA)...");
+  const searchMsg = await ctx.reply("🔍 Выполняю поиск в базе (Open Food Facts, USDA)...");
+
+  const deleteSearchMsg = () => {
+    ctx.telegram.deleteMessage(chatId, searchMsg.message_id).catch(() => {});
+  };
 
   try {
     const searchResponse = await axios.get(`${foodRecognitionServiceUrl}/nutrition/search`, {
@@ -1389,15 +1393,23 @@ bot.action("add_to_diary_from_recipe", async (ctx) => {
       timeout: 15000
     });
     if (!searchResponse.data?.success || !searchResponse.data.results?.length) {
+      deleteSearchMsg();
       await ctx.reply(
         "❌ Не удалось найти БЖУ для этого блюда. Добавьте через Дневник вручную в формате:\n`Название | калории | белки | углеводы | жиры`",
         {
           parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: "📊 Дневник", callback_data: "diary_menu" }]] }
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🔁 Другое блюдо", callback_data: "diary_back_to_recipe" }],
+              [{ text: "📊 Дневник", callback_data: "diary_menu" }]
+            ]
+          }
         }
       );
       return;
     }
+
+    deleteSearchMsg();
 
     const results = searchResponse.data.results;
     const first = results[0];
@@ -1429,13 +1441,90 @@ bot.action("add_to_diary_from_recipe", async (ctx) => {
     });
   } catch (apiError) {
     console.error('Ошибка поиска БЖУ при добавлении из рецепта:', apiError.message);
+    deleteSearchMsg();
     await ctx.reply(
       "❌ Не удалось найти данные по этому блюду. Добавьте через Дневник вручную в формате:\n`Название | калории | белки | углеводы | жиры`",
       {
         parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: [[{ text: "📊 Дневник", callback_data: "diary_menu" }]] }
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔁 Другое блюдо", callback_data: "diary_back_to_recipe" }],
+            [{ text: "📊 Дневник", callback_data: "diary_menu" }]
+          ]
+        }
       }
     );
+  }
+});
+
+// Возврат к поиску рецепта (Завтрак/Обед/Ужин) после «не найдено БЖУ» из «Добавить в дневник»
+bot.action("diary_back_to_recipe", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+
+  await ctx.telegram.deleteMessage(chatId, ctx.callbackQuery.message.message_id).catch(() => {});
+
+  const state = await getUserState(chatId);
+  let dishType = '';
+  if (state === 1) dishType = 'breakfast';
+  else if (state === 2) dishType = 'dinner';
+  else if (state === 3) dishType = 'lunch';
+  else if (state === 4) dishType = 'search';
+
+  if (!dishType) {
+    await ctx.reply("Выберите Завтрак, Обед или Ужин в главном меню.", {
+      reply_markup: { inline_keyboard: [[{ text: "◀️ Главная", callback_data: "back_to_main" }]] }
+    });
+    return;
+  }
+
+  const searchQuery = dishType === 'search' ? await getUserSearchQuery(chatId) : null;
+  if (dishType === 'search' && !searchQuery) {
+    await ctx.reply("Сначала введите поисковый запрос.", {
+      reply_markup: { inline_keyboard: [[{ text: "◀️ Главная", callback_data: "back_to_main" }]] }
+    });
+    return;
+  }
+
+  const limitCheck = await checkRequestLimit(chatId);
+  if (!limitCheck.allowed) {
+    await ctx.reply(
+      "❌ У вас закончились бесплатные запросы (0 осталось).\n\n💡 Для получения подписки обратитесь к администратору.",
+      { reply_markup: { inline_keyboard: [[{ text: "◀️ Главная", callback_data: "back_to_main" }]] } }
+    );
+    return;
+  }
+
+  try {
+    const result = await getRecipeFromParser(dishType, chatId, searchQuery, true);
+    await setUserHref(chatId, dishType, result.url);
+    const recipeTitle = (result.recipeText || '').split('\n')[0].trim() || 'Рецепт без названия';
+    await setRecipeTitle(chatId, recipeTitle);
+    await setRecipeRequested(chatId, dishType, false);
+
+    const recipeText = validateAndTruncateMessage(result.recipeText);
+    const hasHistory = await hasRecipeHistory(chatId, dishType);
+    const isInFav = await isInFavorites(chatId, result.url);
+    const isRecipe = isRecipeUrl(result.url);
+    const keyboard = getDetailedMenuKeyboard(false, hasHistory, isInFav, isRecipe);
+
+    if (result.hasPhoto && result.photoFileId) {
+      await ctx.replyWithPhoto(result.photoFileId, {
+        caption: recipeText,
+        reply_markup: keyboard.reply_markup
+      });
+    } else {
+      await ctx.reply(recipeText, keyboard);
+    }
+
+    if (!limitCheck.hasSubscription) {
+      await decrementFreeRequests(chatId).catch(() => {});
+    }
+  } catch (error) {
+    console.error('Ошибка при возврате к рецепту:', error);
+    await ctx.reply("❌ Ошибка при получении рецепта. Попробуйте позже.", {
+      reply_markup: { inline_keyboard: [[{ text: "◀️ Главная", callback_data: "back_to_main" }]] }
+    });
   }
 });
 
@@ -3352,11 +3441,16 @@ bot.action("diary_add_water", async (ctx) => {
   );
 });
 
-// Обработчик текстовых сообщений для дневника
-bot.on("text", async (ctx) => {
+// Обработчик текстовых сообщений для дневника (поиск state 4 обрабатывается в bot.on("message"))
+bot.on("text", async (ctx, next) => {
   const chatId = ctx.chat.id;
   const text = ctx.message.text;
   const state = await getUserState(chatId);
+
+  // Поиск рецептов (state 4) — передаём в следующий обработчик (message)
+  if (state === 4) {
+    return next();
+  }
 
   // Обработка ввода профиля (состояние 10)
   if (state === 10) {

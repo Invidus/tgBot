@@ -1435,7 +1435,7 @@ bot.action("add_to_diary_from_recipe", async (ctx) => {
             { text: "✅", callback_data: "diary_confirm_food" },
             { text: "🔄", callback_data: "diary_reject_food" }
           ],
-          [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+          [{ text: "❌ Отмена", callback_data: "diary_cancel_from_recipe" }]
         ]
       }
     });
@@ -1457,14 +1457,13 @@ bot.action("add_to_diary_from_recipe", async (ctx) => {
   }
 });
 
-// Возврат к поиску рецепта (Завтрак/Обед/Ужин) после «не найдено БЖУ» из «Добавить в дневник»
-bot.action("diary_back_to_recipe", async (ctx) => {
-  await ctx.answerCbQuery();
+// Общая логика: удалить текущее сообщение и показать новый рецепт (Завтрак/Обед/Ужин/Поиск)
+const deleteMessageAndShowRecipe = async (ctx) => {
   const chatId = ctx.chat.id;
-
   await ctx.telegram.deleteMessage(chatId, ctx.callbackQuery.message.message_id).catch(() => {});
 
   const state = await getUserState(chatId);
+
   let dishType = '';
   if (state === 1) dishType = 'breakfast';
   else if (state === 2) dishType = 'dinner';
@@ -1526,6 +1525,17 @@ bot.action("diary_back_to_recipe", async (ctx) => {
       reply_markup: { inline_keyboard: [[{ text: "◀️ Главная", callback_data: "back_to_main" }]] }
     });
   }
+};
+
+bot.action("diary_back_to_recipe", async (ctx) => {
+  await ctx.answerCbQuery();
+  await deleteMessageAndShowRecipe(ctx);
+});
+
+// Отмена «Добавить в дневник» из рецепта: удалить сообщение «Найдено» и вернуться к поиску рецепта
+bot.action("diary_cancel_from_recipe", async (ctx) => {
+  await ctx.answerCbQuery();
+  await deleteMessageAndShowRecipe(ctx);
 });
 
 // Обработчик "Другое блюдо"

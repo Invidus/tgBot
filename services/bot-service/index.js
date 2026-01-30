@@ -1362,6 +1362,8 @@ bot.action("add_to_diary_from_recipe", async (ctx) => {
     return;
   }
 
+  await ctx.reply("🔍 Выполняю поиск в базе (Open Food Facts, USDA)...");
+
   try {
     const searchResponse = await axios.get(`${foodRecognitionServiceUrl}/nutrition/search`, {
       params: { query: dishName.trim(), limit: 5 },

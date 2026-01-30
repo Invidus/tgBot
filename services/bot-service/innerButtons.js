@@ -40,6 +40,9 @@ export const getDetailedMenuKeyboard = (recipeRequested = false, hasHistory = fa
         Markup.button.callback("Ингредиенты и БЖУ🔎", "ingredients")
       ]);
     }
+
+    // Кнопка добавления блюда в дневник питания
+    buttons.push([Markup.button.callback("📊 Добавить в дневник", "add_to_diary_from_recipe")]);
   }
 
   // Кнопка "Вернуться на главную" на всю ширину

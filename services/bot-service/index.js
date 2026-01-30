@@ -75,6 +75,19 @@ const setUserSearchQuery = async (chatId, query) => {
   }
 };
 
+// Название текущего рецепта (для кнопки «Добавить в дневник»)
+const setRecipeTitle = async (chatId, title) => {
+  if (title && title.trim()) {
+    await redis.setex(`user:recipe_title:${chatId}`, 3600, title.trim());
+  } else {
+    await redis.del(`user:recipe_title:${chatId}`);
+  }
+};
+
+const getRecipeTitle = async (chatId) => {
+  return await redis.get(`user:recipe_title:${chatId}`);
+};
+
 // Функции для работы с историей рецептов в Redis
 const MAX_HISTORY_SIZE = 10;
 
@@ -719,6 +732,8 @@ bot.action("breakfast", async (ctx) => {
     }
     await setUserHref(chatId, 'breakfast', result.url);
     await setRecipeRequested(chatId, 'breakfast', false);
+    const recipeTitle = (result.recipeText || '').split('\n')[0].trim() || 'Рецепт без названия';
+    await setRecipeTitle(chatId, recipeTitle);
 
     const recipeText = validateAndTruncateMessage(result.recipeText);
     const hasHistory = await hasRecipeHistory(chatId, 'breakfast');
@@ -798,6 +813,8 @@ bot.action("dinner", async (ctx) => {
     }
     await setUserHref(chatId, 'dinner', result.url);
     await setRecipeRequested(chatId, 'dinner', false);
+    const recipeTitle = (result.recipeText || '').split('\n')[0].trim() || 'Рецепт без названия';
+    await setRecipeTitle(chatId, recipeTitle);
 
     const recipeText = validateAndTruncateMessage(result.recipeText);
     const hasHistory = await hasRecipeHistory(chatId, 'dinner');
@@ -877,6 +894,8 @@ bot.action("lunch", async (ctx) => {
     }
     await setUserHref(chatId, 'lunch', result.url);
     await setRecipeRequested(chatId, 'lunch', false);
+    const recipeTitle = (result.recipeText || '').split('\n')[0].trim() || 'Рецепт без названия';
+    await setRecipeTitle(chatId, recipeTitle);
 
     const recipeText = validateAndTruncateMessage(result.recipeText);
     const hasHistory = await hasRecipeHistory(chatId, 'lunch');
@@ -1317,6 +1336,88 @@ bot.action("remove_from_favorites", async (ctx) => {
   }
 });
 
+// Добавить текущее блюдо (из рецепта Завтрак/Обед/Ужин/Поиск) в дневник
+bot.action("add_to_diary_from_recipe", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+
+  const user = await getUserByChatId(chatId);
+  let hasActiveSub = false;
+  if (user && user.subscription_end_date) {
+    hasActiveSub = new Date(user.subscription_end_date) > new Date();
+  }
+  if (!hasActiveSub) {
+    hasActiveSub = await hasActiveSubscription(chatId);
+  }
+  if (!hasActiveSub) {
+    await ctx.reply("❌ Дневник питания доступен только для подписчиков!");
+    return;
+  }
+
+  const dishName = await getRecipeTitle(chatId);
+  if (!dishName || !dishName.trim()) {
+    await ctx.reply("❌ Не удалось определить блюдо. Добавьте его через меню Дневник → Добавить блюдо.", {
+      reply_markup: { inline_keyboard: [[{ text: "📊 Дневник", callback_data: "diary_menu" }]] }
+    });
+    return;
+  }
+
+  try {
+    const searchResponse = await axios.get(`${foodRecognitionServiceUrl}/nutrition/search`, {
+      params: { query: dishName.trim(), limit: 5 },
+      timeout: 15000
+    });
+    if (!searchResponse.data?.success || !searchResponse.data.results?.length) {
+      await ctx.reply(
+        "❌ Не удалось найти БЖУ для этого блюда. Добавьте через Дневник вручную в формате:\n`Название | калории | белки | углеводы | жиры`",
+        {
+          parse_mode: 'Markdown',
+          reply_markup: { inline_keyboard: [[{ text: "📊 Дневник", callback_data: "diary_menu" }]] }
+        }
+      );
+      return;
+    }
+
+    const results = searchResponse.data.results;
+    const first = results[0];
+    const pendingKey = `user:diary_pending:${chatId}`;
+    await redis.setex(pendingKey, 600, JSON.stringify({
+      query: dishName.trim(),
+      results,
+      index: 0
+    }));
+
+    const msg = `🔍 **Найдено:** ${first.dishName}\n\n` +
+      `🔥 Калории: ${first.calories} ккал\n` +
+      `🥗 Белки: ${first.protein}г\n` +
+      `🍞 Углеводы: ${first.carbs}г\n` +
+      `🧈 Жиры: ${first.fats}г\n\n` +
+      `📚 Источник: ${first.source || '—'}\n\n` +
+      `Добавить в дневник?\n\nНажмите кнопку обновить, чтобы продолжить поиск`;
+    await ctx.reply(msg, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "✅", callback_data: "diary_confirm_food" },
+            { text: "🔄", callback_data: "diary_reject_food" }
+          ],
+          [{ text: "❌ Отмена", callback_data: "diary_menu" }]
+        ]
+      }
+    });
+  } catch (apiError) {
+    console.error('Ошибка поиска БЖУ при добавлении из рецепта:', apiError.message);
+    await ctx.reply(
+      "❌ Не удалось найти данные по этому блюду. Добавьте через Дневник вручную в формате:\n`Название | калории | белки | углеводы | жиры`",
+      {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [[{ text: "📊 Дневник", callback_data: "diary_menu" }]] }
+      }
+    );
+  }
+});
+
 // Обработчик "Другое блюдо"
 bot.action("another_dish", async (ctx) => {
   // Не вызываем answerCbQuery сразу, чтобы индикатор загрузки оставался на кнопке
@@ -1406,6 +1507,8 @@ bot.action("another_dish", async (ctx) => {
     }
 
     await setUserHref(chatId, dishType, result.url);
+    const recipeTitleAnother = (result.recipeText || '').split('\n')[0].trim() || 'Рецепт без названия';
+    await setRecipeTitle(chatId, recipeTitleAnother);
 
     const recipeText = validateAndTruncateMessage(result.recipeText);
     const hasHistory = await hasRecipeHistory(chatId, dishType);
@@ -3936,6 +4039,8 @@ bot.on("message", async (ctx) => {
 
         await setUserHref(chatId, 'search', result.url);
         await setRecipeRequested(chatId, 'search', false);
+        const recipeTitleSearch = (result.recipeText || '').split('\n')[0].trim() || 'Рецепт без названия';
+        await setRecipeTitle(chatId, recipeTitleSearch);
 
         const recipeText = validateAndTruncateMessage(result.recipeText);
         const hasHistory = await hasRecipeHistory(chatId, 'search');

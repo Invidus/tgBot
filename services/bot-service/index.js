@@ -2980,14 +2980,14 @@ bot.action("diary_reject_food", async (ctx) => {
     `🍞 Углеводы: ${item.carbs}г\n` +
     `🧈 Жиры: ${item.fats}г\n\n` +
     `📚 Источник: ${item.source || '—'}\n\n` +
-    `Подходит? Добавить в дневник?`;
+    `Добавить в дневник?\n\nНажмите кнопку обновить, чтобы продолжить поиск`;
   await ctx.editMessageText(msg, {
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: [
         [
           { text: "✅", callback_data: "diary_confirm_food" },
-          { text: "❌", callback_data: "diary_reject_food" }
+          { text: "🔄", callback_data: "diary_reject_food" }
         ],
         [{ text: "❌ Отмена", callback_data: "diary_menu" }]
       ]
@@ -2999,7 +2999,7 @@ bot.action("diary_reject_food", async (ctx) => {
         inline_keyboard: [
           [
             { text: "✅", callback_data: "diary_confirm_food" },
-            { text: "❌", callback_data: "diary_reject_food" }
+            { text: "🔄", callback_data: "diary_reject_food" }
           ],
           [{ text: "❌ Отмена", callback_data: "diary_menu" }]
         ]
@@ -3293,14 +3293,14 @@ bot.on("text", async (ctx) => {
             `🍞 Углеводы: ${first.carbs}г\n` +
             `🧈 Жиры: ${first.fats}г\n\n` +
             `📚 Источник: ${first.source || '—'}\n\n` +
-            `Подходит? Добавить в дневник?`;
+            `Добавить в дневник?\n\nНажмите кнопку обновить, чтобы продолжить поиск`;
           await ctx.reply(msg, {
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: [
                 [
                   { text: "✅", callback_data: "diary_confirm_food" },
-                  { text: "❌", callback_data: "diary_reject_food" }
+                  { text: "🔄", callback_data: "diary_reject_food" }
                 ],
                 [{ text: "❌ Отмена", callback_data: "diary_menu" }]
               ]

@@ -4154,9 +4154,8 @@ bot.on("photo", async (ctx) => {
       });
     }
 
-    // Сохраняем название блюда и file_id фото для «Добавить в дневник» и «Повторить по этой фото» (TTL 10 мин)
+    // Сохраняем название блюда для кнопки «Добавить в дневник» (TTL 10 мин)
     await redis.setex(`user:recognition_last:${chatId}`, 600, JSON.stringify({ dishName: result.dishName }));
-    await redis.setex(`user:recognition_photo:${chatId}`, 600, photo.file_id);
 
     // Возвращаем в главное меню после успешного распознавания
     await setUserState(chatId, 0);
@@ -4166,10 +4165,7 @@ bot.on("photo", async (ctx) => {
       reply_markup: {
         inline_keyboard: [
           [{ text: "📊 Добавить в дневник", callback_data: "add_to_diary_from_recognition" }],
-          [
-            { text: "🔄 Повторить по этой фото", callback_data: "recognize_food_same_photo" },
-            { text: "📸 Распознать еще", callback_data: "recognize_food" }
-          ],
+          [{ text: "📸 Распознать еще", callback_data: "recognize_food" }],
           [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
         ]
       }
@@ -4213,146 +4209,6 @@ bot.on("photo", async (ctx) => {
 
     // Возвращаем состояние, чтобы можно было попробовать еще раз
     await setUserState(chatId, 5);
-  }
-});
-
-// Повторное распознавание по той же фото (без нового загрузки)
-bot.action("recognize_food_same_photo", async (ctx) => {
-  await ctx.answerCbQuery();
-  const chatId = ctx.chat.id;
-
-  const photoFileId = await redis.get(`user:recognition_photo:${chatId}`);
-  if (!photoFileId) {
-    await ctx.reply("❌ Сначала отправьте фото блюда для распознавания.", {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "📸 Распознать блюдо", callback_data: "recognize_food" }],
-          [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
-        ]
-      }
-    });
-    return;
-  }
-
-  const aiLimitCheck = await checkAiRequestLimit(chatId);
-  if (!aiLimitCheck.allowed) {
-    if (aiLimitCheck.reason === 'no_subscription') {
-      await ctx.reply(
-        "📸 **Распознавание блюд по фото**\n\n❌ Эта функция доступна только для подписчиков!",
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "💳 Оформить подписку", callback_data: "subscription_menu" }],
-              [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
-            ]
-          }
-        }
-      );
-      return;
-    }
-    if (aiLimitCheck.reason === 'daily_limit') {
-      await ctx.reply(
-        `📸 **Лимит ИИ запросов исчерпан**\n\n❌ Вы использовали все ${aiLimitCheck.usedToday} запросов сегодня.\n\n🕐 Лимит обновится завтра.\n📊 Максимум: 5 запросов в день`,
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [[{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]]
-          }
-        }
-      );
-      return;
-    }
-    await ctx.reply("❌ Ошибка проверки лимита. Попробуйте позже.", {
-      reply_markup: {
-        inline_keyboard: [[{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]]
-      }
-    });
-    return;
-  }
-
-  const loadingMsg = await ctx.reply("🔍 Анализирую фото блюда (повторный запрос)...");
-
-  try {
-    const file = await ctx.telegram.getFile(photoFileId);
-    const fileUrl = `https://api.telegram.org/file/bot${config.telegramToken}/${file.file_path}`;
-
-    const response = await axios.post(`${foodRecognitionServiceUrl}/recognize`, {
-      imageUrl: fileUrl,
-      chatId: chatId
-    }, {
-      timeout: 60000,
-      headers: { 'Content-Type': 'application/json' }
-    });
-
-    const result = response.data;
-    if (!result || !result.success) {
-      throw new Error(result?.error || 'Ошибка распознавания');
-    }
-
-    await decrementAiRequests(chatId);
-    const aiInfo = await getAiRequestsInfo(chatId);
-    await ctx.telegram.deleteMessage(chatId, loadingMsg.message_id);
-
-    let replyText = `🍽️ **${result.dishName}**\n\n`;
-    replyText += `⚠️ *ИИ запросы находятся на стадии тестирования и могут выдавать не совсем точные ответы*\n\n`;
-    replyText += `📊 **Пищевая ценность (на 100г):**\n`;
-    replyText += `🔥 Калории: ${result.calories} ккал\n`;
-    replyText += `🥗 Белки: ${result.protein}г\n`;
-    replyText += `🍞 Углеводы: ${result.carbs}г\n`;
-    replyText += `🧈 Жиры: ${result.fats}г\n\n`;
-    replyText += `📈 Точность: ${result.confidence}%\n`;
-    replyText += `📚 Источник: ${result.source}\n\n`;
-    if (aiInfo) {
-      if (aiInfo.aiRequestsTotal > 0) {
-        replyText += `📊 ИИ запросов осталось: ${aiInfo.aiRequestsRemaining} (добавлено через админ-панель)`;
-      } else {
-        replyText += `📊 ИИ запросов осталось сегодня: ${aiInfo.aiRequestsRemaining}/5`;
-      }
-    }
-    if (result.alternatives && result.alternatives.length > 0) {
-      replyText += `\n\n🔀 **Возможные варианты:**\n`;
-      result.alternatives.forEach((alt, index) => {
-        replyText += `${index + 1}. ${alt.name} (${Math.round(alt.confidence * 100)}%)\n`;
-      });
-    }
-
-    await redis.setex(`user:recognition_last:${chatId}`, 600, JSON.stringify({ dishName: result.dishName }));
-    await redis.setex(`user:recognition_photo:${chatId}`, 600, photoFileId);
-
-    await ctx.reply(replyText, {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "📊 Добавить в дневник", callback_data: "add_to_diary_from_recognition" }],
-          [
-            { text: "🔄 Повторить по этой фото", callback_data: "recognize_food_same_photo" },
-            { text: "📸 Распознать еще", callback_data: "recognize_food" }
-          ],
-          [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
-        ]
-      }
-    });
-  } catch (error) {
-    console.error('Ошибка повторного распознавания по фото:', error.message);
-    await ctx.telegram.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
-
-    let errText = "❌ Не удалось распознать блюдо повторно.\n\n";
-    if (error.message.includes('недоступен') || error.message.includes('ECONNREFUSED')) {
-      errText += "⚠️ Сервис распознавания временно недоступен. Попробуйте позже.";
-    } else {
-      errText += "💡 Попробуйте «Распознать еще» с новым фото или повторите позже.";
-    }
-
-    await ctx.reply(errText, {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "🔄 Повторить по этой фото", callback_data: "recognize_food_same_photo" }],
-          [{ text: "📸 Распознать еще", callback_data: "recognize_food" }],
-          [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
-        ]
-      }
-    });
   }
 });
 

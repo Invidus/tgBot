@@ -27,7 +27,17 @@ const redis = new Redis({
   retryStrategy: (times) => {
     const delay = Math.min(times * 50, 2000);
     return delay;
-  }
+  },
+  maxRetriesPerRequest: 3,
+  enableReadyCheck: true,
+  lazyConnect: false
+});
+
+redis.on('error', (err) => {
+  console.error('⚠️ Redis:', err.message);
+});
+redis.on('connect', () => {
+  console.log('✅ Redis подключен');
 });
 
 const recipeParserUrl = config.services.recipeParser;
@@ -1465,6 +1475,129 @@ bot.action("add_to_diary_from_recipe", async (ctx) => {
       }
     );
   }
+});
+
+// Добавить распознанное по фото блюдо в дневник (поиск БЖУ + выбор варианта + граммы)
+bot.action("add_to_diary_from_recognition", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+
+  const user = await getUserByChatId(chatId);
+  let hasActiveSub = false;
+  if (user && user.subscription_end_date) {
+    hasActiveSub = new Date(user.subscription_end_date) > new Date();
+  }
+  if (!hasActiveSub) {
+    hasActiveSub = await hasActiveSubscription(chatId);
+  }
+  if (!hasActiveSub) {
+    await ctx.reply("❌ Дневник питания доступен только для подписчиков!");
+    return;
+  }
+
+  const recognitionStr = await redis.get(`user:recognition_last:${chatId}`);
+  let dishName = null;
+  if (recognitionStr) {
+    try {
+      const data = JSON.parse(recognitionStr);
+      dishName = data.dishName && data.dishName.trim();
+    } catch (_) {}
+  }
+  if (!dishName) {
+    await ctx.reply("❌ Сначала распознайте блюдо по фото.", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📸 Распознать блюдо", callback_data: "recognize_food" }],
+          [{ text: "◀️ Главная", callback_data: "back_to_main" }]
+        ]
+      }
+    });
+    return;
+  }
+
+  const searchMsg = await ctx.reply("🔍 Выполняю поиск в базе (Open Food Facts, USDA)...");
+  const deleteSearchMsg = () => {
+    ctx.telegram.deleteMessage(chatId, searchMsg.message_id).catch(() => {});
+  };
+
+  try {
+    const searchResponse = await axios.get(`${foodRecognitionServiceUrl}/nutrition/search`, {
+      params: { query: dishName, limit: 5 },
+      timeout: 15000
+    });
+    if (!searchResponse.data?.success || !searchResponse.data.results?.length) {
+      deleteSearchMsg();
+      await ctx.reply(
+        "❌ Не удалось найти БЖУ для этого блюда. Добавьте через Дневник вручную в формате:\n`Название | калории | белки | углеводы | жиры`",
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "📸 Распознать еще", callback_data: "recognize_food" }],
+              [{ text: "📊 Дневник", callback_data: "diary_menu" }],
+              [{ text: "◀️ Главная", callback_data: "back_to_main" }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+
+    deleteSearchMsg();
+    const results = searchResponse.data.results;
+    const first = results[0];
+    const pendingKey = `user:diary_pending:${chatId}`;
+    await redis.setex(pendingKey, 600, JSON.stringify({
+      query: dishName,
+      results,
+      index: 0,
+      from_recognition: true
+    }));
+
+    const msg = `🔍 **Найдено:** ${first.dishName}\n\n` +
+      `🔥 Калории: ${first.calories} ккал\n` +
+      `🥗 Белки: ${first.protein}г\n` +
+      `🍞 Углеводы: ${first.carbs}г\n` +
+      `🧈 Жиры: ${first.fats}г\n\n` +
+      `📚 Источник: ${first.source || '—'}\n\n` +
+      `Добавить в дневник?\n\nНажмите кнопку обновить (🔄), чтобы выбрать другой вариант из поиска`;
+    await ctx.reply(msg, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "✅", callback_data: "diary_confirm_food" },
+            { text: "🔄", callback_data: "diary_reject_food" }
+          ],
+          [{ text: "❌ Отмена", callback_data: "diary_cancel_from_recognition" }]
+        ]
+      }
+    });
+  } catch (apiError) {
+    console.error('Ошибка поиска БЖУ при добавлении из распознавания:', apiError.message);
+    deleteSearchMsg();
+    await ctx.reply(
+      "❌ Не удалось найти данные по этому блюду. Добавьте через Дневник вручную в формате:\n`Название | калории | белки | углеводы | жиры`",
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "📸 Распознать еще", callback_data: "recognize_food" }],
+            [{ text: "📊 Дневник", callback_data: "diary_menu" }],
+            [{ text: "◀️ Главная", callback_data: "back_to_main" }]
+          ]
+        }
+      }
+    );
+  }
+});
+
+// Отмена «Добавить в дневник» из распознавания: удалить сообщение «Найдено»
+bot.action("diary_cancel_from_recognition", async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.chat.id;
+  await redis.del(`user:diary_pending:${chatId}`).catch(() => {});
+  await ctx.telegram.deleteMessage(chatId, ctx.callbackQuery.message.message_id).catch(() => {});
 });
 
 // Общая логика: удалить текущее сообщение и показать новый рецепт (Завтрак/Обед/Ужин/Поиск)
@@ -3352,7 +3485,6 @@ bot.action("diary_reject_food", async (ctx) => {
   await ctx.answerCbQuery();
   const chatId = ctx.chat.id;
   const state = await getUserState(chatId);
-  const cancelCallback = (state === 1 || state === 2 || state === 3 || state === 4) ? "diary_cancel_from_recipe" : "diary_menu";
 
   const pendingKey = `user:diary_pending:${chatId}`;
   const pendingStr = await redis.get(pendingKey);
@@ -3364,6 +3496,10 @@ bot.action("diary_reject_food", async (ctx) => {
   }
 
   const pending = JSON.parse(pendingStr);
+  const cancelCallback = pending.from_recognition
+    ? "diary_cancel_from_recognition"
+    : (state === 1 || state === 2 || state === 3 || state === 4) ? "diary_cancel_from_recipe" : "diary_menu";
+
   pending.index += 1;
 
   if (pending.index >= pending.results.length) {
@@ -4018,6 +4154,9 @@ bot.on("photo", async (ctx) => {
       });
     }
 
+    // Сохраняем название блюда для кнопки «Добавить в дневник» (TTL 10 мин)
+    await redis.setex(`user:recognition_last:${chatId}`, 600, JSON.stringify({ dishName: result.dishName }));
+
     // Возвращаем в главное меню после успешного распознавания
     await setUserState(chatId, 0);
 
@@ -4025,6 +4164,7 @@ bot.on("photo", async (ctx) => {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
+          [{ text: "📊 Добавить в дневник", callback_data: "add_to_diary_from_recognition" }],
           [{ text: "📸 Распознать еще", callback_data: "recognize_food" }],
           [{ text: "◀️ Вернуться на главную", callback_data: "back_to_main" }]
         ]
@@ -4780,6 +4920,14 @@ const shutdown = async (signal) => {
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// Глобальный перехват ошибок (в т.ч. Redis READONLY), чтобы не ронять процесс
+bot.catch((err, ctx) => {
+  console.error('⚠️ Ошибка при обработке обновления:', err.message);
+  try {
+    ctx.reply('Временная ошибка. Попробуйте через минуту.').catch(() => {});
+  } catch (_) {}
+});
 
 // Запуск бота
 bot.launch()

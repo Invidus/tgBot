@@ -412,6 +412,29 @@ app.get('/favorites/item/:id', async (req, res) => {
 
 // ==================== ПОДПИСКИ ====================
 
+// Получение подписок, которые скоро истекают (маршрут ДОЛЖЕН быть выше /:chatId)
+app.get('/subscriptions/expiring-soon', async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 3; // По умолчанию 3 дня
+    const date = new Date();
+    date.setDate(date.getDate() + days);
+
+    const result = await pool.query(
+      `SELECT * FROM subscriptions
+       WHERE is_active = TRUE
+       AND end_date <= $1
+       AND end_date > CURRENT_TIMESTAMP
+       ORDER BY end_date ASC`,
+      [date]
+    );
+
+    res.json({ subscriptions: result.rows });
+  } catch (error) {
+    console.error('Ошибка получения истекающих подписок:', error);
+    res.status(500).json({ error: 'Ошибка БД' });
+  }
+});
+
 // Получение информации о подписке пользователя
 app.get('/subscriptions/:chatId', async (req, res) => {
   try {
@@ -478,29 +501,6 @@ app.post('/subscriptions', async (req, res) => {
     res.json({ subscription: result.rows[0] });
   } catch (error) {
     console.error('Ошибка создания подписки:', error);
-    res.status(500).json({ error: 'Ошибка БД' });
-  }
-});
-
-// Получение подписок, которые скоро истекают (для уведомлений)
-app.get('/subscriptions/expiring-soon', async (req, res) => {
-  try {
-    const days = parseInt(req.query.days) || 3; // По умолчанию 3 дня
-    const date = new Date();
-    date.setDate(date.getDate() + days);
-
-    const result = await pool.query(
-      `SELECT * FROM subscriptions
-       WHERE is_active = TRUE
-       AND end_date <= $1
-       AND end_date > CURRENT_TIMESTAMP
-       ORDER BY end_date ASC`,
-      [date]
-    );
-
-    res.json({ subscriptions: result.rows });
-  } catch (error) {
-    console.error('Ошибка получения истекающих подписок:', error);
     res.status(500).json({ error: 'Ошибка БД' });
   }
 });
@@ -1063,7 +1063,7 @@ app.get('/users/:chatId/ai-requests/check', async (req, res) => {
         [chatId, today]
       );
       const todayRequests = historyResult.rows[0]?.request_count || 0;
-      
+
       return res.json({
         allowed: true,
         remaining: aiRequestsTotal, // Используем общий счетчик
@@ -1286,7 +1286,7 @@ app.get('/users/:chatId/ai-requests/info', async (req, res) => {
     const todayRequests = historyResult.rows[0]?.request_count || 0;
     const maxDailyRequests = 5;
     const aiRequestsTotal = user.ai_requests || 0;
-    
+
     // Если есть общие запросы, используем их, иначе дневной лимит
     let remaining;
     if (aiRequestsTotal > 0) {

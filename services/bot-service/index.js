@@ -4812,27 +4812,60 @@ bot.on('successful_payment', async (ctx) => {
 });
 
 // Функция для отправки уведомлений о скором окончании подписки
+// Отправляет не чаще одного раза «за 3 дня» и одного раза «за 1 день» (флаги в Redis)
 const sendSubscriptionExpiryNotifications = async () => {
   try {
-    const expiringSubscriptions = await getExpiringSubscriptions(3); // За 3 дня до окончания
+    const expiringSubscriptions = await getExpiringSubscriptions(3);
+    const now = new Date();
 
     for (const subscription of expiringSubscriptions) {
+      const chatId = subscription.chat_id;
       const endDate = new Date(subscription.end_date);
-      const daysLeft = Math.ceil((endDate - new Date()) / (1000 * 60 * 60 * 24));
+      const daysLeftExact = (endDate - now) / (1000 * 60 * 60 * 24);
 
-      let message = `⏰ **Уведомление о подписке**\n\n`;
-      message += `Ваша подписка заканчивается через ${daysLeft} ${daysLeft === 1 ? 'день' : daysLeft < 5 ? 'дня' : 'дней'}!\n\n`;
-      message += `📅 Дата окончания: ${endDate.toLocaleDateString('ru-RU')}\n\n`;
-      message += `💳 Продлите подписку, чтобы продолжить пользоваться ботом без ограничений!`;
+      // Уведомление «за 3 дня» — только если осталось от 2 до 3 дней и ещё не отправляли
+      if (daysLeftExact > 2 && daysLeftExact <= 3) {
+        const sentKey3 = `sub_expiry_sent:${chatId}:3`;
+        const alreadySent3 = await redis.get(sentKey3);
+        if (!alreadySent3) {
+          const message = `⏰ **Уведомление о подписке**\n\n` +
+            `Ваша подписка заканчивается через 3 дня!\n\n` +
+            `📅 Дата окончания: ${endDate.toLocaleDateString('ru-RU')}\n\n` +
+            `💳 Продлите подписку, чтобы продолжить пользоваться ботом без ограничений!`;
+          try {
+            await bot.telegram.sendMessage(chatId, message, {
+              parse_mode: 'Markdown',
+              reply_markup: getSubscriptionKeyboard().reply_markup
+            });
+            await redis.setex(sentKey3, 2 * 24 * 3600, '1'); // не слать снова 2 дня
+            console.log(`✅ Уведомление «за 3 дня» отправлено пользователю ${chatId}`);
+          } catch (error) {
+            console.error(`❌ Ошибка отправки уведомления пользователю ${chatId}:`, error.message);
+          }
+        }
+        continue;
+      }
 
-      try {
-        await bot.telegram.sendMessage(subscription.chat_id, message, {
-          parse_mode: 'Markdown',
-          reply_markup: getSubscriptionKeyboard().reply_markup
-        });
-        console.log(`✅ Уведомление отправлено пользователю ${subscription.chat_id}`);
-      } catch (error) {
-        console.error(`❌ Ошибка отправки уведомления пользователю ${subscription.chat_id}:`, error.message);
+      // Уведомление «за 1 день» — только если осталось от 0 до 1 дня и ещё не отправляли
+      if (daysLeftExact > 0 && daysLeftExact <= 1) {
+        const sentKey1 = `sub_expiry_sent:${chatId}:1`;
+        const alreadySent1 = await redis.get(sentKey1);
+        if (!alreadySent1) {
+          const message = `⏰ **Уведомление о подписке**\n\n` +
+            `Ваша подписка заканчивается завтра!\n\n` +
+            `📅 Дата окончания: ${endDate.toLocaleDateString('ru-RU')}\n\n` +
+            `💳 Продлите подписку, чтобы продолжить пользоваться ботом без ограничений!`;
+          try {
+            await bot.telegram.sendMessage(chatId, message, {
+              parse_mode: 'Markdown',
+              reply_markup: getSubscriptionKeyboard().reply_markup
+            });
+            await redis.setex(sentKey1, 25 * 3600, '1'); // не слать снова 25 ч
+            console.log(`✅ Уведомление «за 1 день» отправлено пользователю ${chatId}`);
+          } catch (error) {
+            console.error(`❌ Ошибка отправки уведомления пользователю ${chatId}:`, error.message);
+          }
+        }
       }
     }
   } catch (error) {
@@ -4881,10 +4914,10 @@ const getTimeUntilNextReset = () => {
   return resetTimeUTC - utcNow;
 };
 
-// Запускаем периодическую проверку истекающих подписок (каждый час)
+// Проверка истекающих подписок раз в час; уведомления отправляются не чаще одного раза «за 3 дня» и одного «за 1 день» (флаги в Redis)
 setInterval(() => {
   sendSubscriptionExpiryNotifications().catch(console.error);
-}, 60 * 60 * 1000); // Каждый час
+}, 60 * 60 * 1000);
 
 // Запускаем ежедневный сброс ИИ запросов в 00:00 МСК
 const scheduleDailyReset = () => {

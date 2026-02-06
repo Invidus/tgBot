@@ -4812,22 +4812,22 @@ bot.on('successful_payment', async (ctx) => {
 });
 
 // Функция для отправки уведомлений о скором окончании подписки
-// Отправляет не чаще одного раза «за 3 дня» и одного раза «за 1 день» (флаги в Redis)
+// Отправляет ровно один раз «за 3 дня» и ровно один раз «за 1 день» (Redis SET NX + запуск раз в сутки)
 const sendSubscriptionExpiryNotifications = async () => {
   try {
     const expiringSubscriptions = await getExpiringSubscriptions(3);
     const now = new Date();
 
     for (const subscription of expiringSubscriptions) {
-      const chatId = subscription.chat_id;
+      const chatId = String(subscription.chat_id);
       const endDate = new Date(subscription.end_date);
       const daysLeftExact = (endDate - now) / (1000 * 60 * 60 * 24);
 
-      // Уведомление «за 3 дня» — только если осталось от 2 до 3 дней и ещё не отправляли
+      // Уведомление «за 3 дня» — только если осталось от 2 до 3 дней; ставим ключ до отправки (SET NX), чтобы не дублировать при нескольких инстансах
       if (daysLeftExact > 2 && daysLeftExact <= 3) {
         const sentKey3 = `sub_expiry_sent:${chatId}:3`;
-        const alreadySent3 = await redis.get(sentKey3);
-        if (!alreadySent3) {
+        const claimed = await redis.set(sentKey3, '1', 'EX', 2 * 24 * 3600, 'NX');
+        if (claimed === 'OK') {
           const message = `⏰ **Уведомление о подписке**\n\n` +
             `Ваша подписка заканчивается через 3 дня!\n\n` +
             `📅 Дата окончания: ${endDate.toLocaleDateString('ru-RU')}\n\n` +
@@ -4837,20 +4837,20 @@ const sendSubscriptionExpiryNotifications = async () => {
               parse_mode: 'Markdown',
               reply_markup: getSubscriptionKeyboard().reply_markup
             });
-            await redis.setex(sentKey3, 2 * 24 * 3600, '1'); // не слать снова 2 дня
             console.log(`✅ Уведомление «за 3 дня» отправлено пользователю ${chatId}`);
           } catch (error) {
             console.error(`❌ Ошибка отправки уведомления пользователю ${chatId}:`, error.message);
+            await redis.del(sentKey3).catch(() => {}); // снять флаг при ошибке, чтобы попробовать в следующий день
           }
         }
         continue;
       }
 
-      // Уведомление «за 1 день» — только если осталось от 0 до 1 дня и ещё не отправляли
+      // Уведомление «за 1 день» — только если осталось от 0 до 1 дня
       if (daysLeftExact > 0 && daysLeftExact <= 1) {
         const sentKey1 = `sub_expiry_sent:${chatId}:1`;
-        const alreadySent1 = await redis.get(sentKey1);
-        if (!alreadySent1) {
+        const claimed = await redis.set(sentKey1, '1', 'EX', 25 * 3600, 'NX');
+        if (claimed === 'OK') {
           const message = `⏰ **Уведомление о подписке**\n\n` +
             `Ваша подписка заканчивается завтра!\n\n` +
             `📅 Дата окончания: ${endDate.toLocaleDateString('ru-RU')}\n\n` +
@@ -4860,10 +4860,10 @@ const sendSubscriptionExpiryNotifications = async () => {
               parse_mode: 'Markdown',
               reply_markup: getSubscriptionKeyboard().reply_markup
             });
-            await redis.setex(sentKey1, 25 * 3600, '1'); // не слать снова 25 ч
             console.log(`✅ Уведомление «за 1 день» отправлено пользователю ${chatId}`);
           } catch (error) {
             console.error(`❌ Ошибка отправки уведомления пользователю ${chatId}:`, error.message);
+            await redis.del(sentKey1).catch(() => {});
           }
         }
       }
@@ -4889,35 +4889,43 @@ const resetDailyAiRequests = async () => {
 // Функция для расчета времени до следующего сброса (00:00 МСК)
 const getTimeUntilNextReset = () => {
   const now = new Date();
-
-  // МСК = UTC+3 (или UTC+2 в летнее время, но для простоты используем UTC+3)
-  // Получаем текущее время в UTC
   const utcNow = now.getTime();
-
-  // МСК offset: +3 часа = 3 * 60 * 60 * 1000 мс
   const moscowOffset = 3 * 60 * 60 * 1000;
   const moscowTime = new Date(utcNow + moscowOffset);
-
-  // Создаем объект для времени сброса (00:00 МСК)
   const resetTimeMoscow = new Date(moscowTime);
   resetTimeMoscow.setUTCHours(0, 0, 0, 0);
-
-  // Если уже прошло 00:00 МСК сегодня, устанавливаем на завтра
   if (moscowTime.getTime() >= resetTimeMoscow.getTime()) {
     resetTimeMoscow.setUTCDate(resetTimeMoscow.getUTCDate() + 1);
   }
-
-  // Конвертируем обратно в UTC
-  const resetTimeUTC = resetTimeMoscow.getTime() - moscowOffset;
-
-  // Возвращаем разницу во времени
-  return resetTimeUTC - utcNow;
+  return resetTimeMoscow.getTime() - moscowOffset - utcNow;
 };
 
-// Проверка истекающих подписок раз в час; уведомления отправляются не чаще одного раза «за 3 дня» и одного «за 1 день» (флаги в Redis)
-setInterval(() => {
-  sendSubscriptionExpiryNotifications().catch(console.error);
-}, 60 * 60 * 1000);
+// Время до следующего запуска уведомлений о подписке (10:00 МСК, раз в сутки)
+const getTimeUntilNotificationRun = () => {
+  const now = new Date();
+  const utcNow = now.getTime();
+  const moscowOffset = 3 * 60 * 60 * 1000;
+  const moscowTime = new Date(utcNow + moscowOffset);
+  const runTimeMoscow = new Date(moscowTime);
+  runTimeMoscow.setUTCHours(10, 0, 0, 0);
+  if (moscowTime.getTime() >= runTimeMoscow.getTime()) {
+    runTimeMoscow.setUTCDate(runTimeMoscow.getUTCDate() + 1);
+  }
+  return runTimeMoscow.getTime() - moscowOffset - utcNow;
+};
+
+// Уведомления о подписке — ровно раз в сутки в 10:00 МСК (один раз «за 3 дня», один раз «за 1 день»)
+const scheduleSubscriptionNotifications = () => {
+  const timeUntil = getTimeUntilNotificationRun();
+  console.log(`⏰ Следующая проверка уведомлений о подписке через ${Math.round(timeUntil / 1000 / 60)} мин (10:00 МСК)`);
+  setTimeout(() => {
+    sendSubscriptionExpiryNotifications().catch(console.error);
+    setInterval(() => {
+      sendSubscriptionExpiryNotifications().catch(console.error);
+    }, 24 * 60 * 60 * 1000);
+  }, timeUntil);
+};
+scheduleSubscriptionNotifications();
 
 // Запускаем ежедневный сброс ИИ запросов в 00:00 МСК
 const scheduleDailyReset = () => {

@@ -498,6 +498,12 @@ app.post('/subscriptions', async (req, res) => {
       [chatId, subscriptionType, startDate, endDate]
     );
 
+    // Синхронизируем дату окончания подписки в таблице users (для быстрой проверки hasActiveSub)
+    await pool.query(
+      `UPDATE users SET subscription_end_date = $1, updated_at = CURRENT_TIMESTAMP WHERE chat_id = $2`,
+      [endDate, chatId]
+    );
+
     res.json({ subscription: result.rows[0] });
   } catch (error) {
     console.error('Ошибка создания подписки:', error);

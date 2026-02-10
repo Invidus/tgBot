@@ -80,6 +80,7 @@ services:
     container_name: tgbot_bot
     environment:
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
+      ADMIN_USERNAMES: ${ADMIN_USERNAMES:-}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       DATABASE_SERVICE_URL: http://database-service:3002

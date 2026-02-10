@@ -1,14 +1,10 @@
 import axios from 'axios';
 
-// Админ username (можно указать несколько через запятую)
-// Например: 'DmitriyBuyanov' или 'DmitriyBuyanov, admin2, admin3'
-const ADMIN_USERNAMES_STRING = 'DmitriyBuyanov';
-
-/**
- * Получает список администраторов из строки
- */
+// Список админов из переменной окружения ADMIN_USERNAMES (несколько через запятую, без @)
+// На VPS в .env задайте: ADMIN_USERNAMES=ваш_telegram_username или ADMIN_USERNAMES=user1,user2
 const getAdminUsernames = () => {
-  return ADMIN_USERNAMES_STRING
+  const raw = process.env.ADMIN_USERNAMES || '';
+  return raw
     .split(',')
     .map(name => name.trim().replace('@', '').toLowerCase())
     .filter(name => name.length > 0);
@@ -350,4 +346,3 @@ export const processSetSubscription = async (ctx, text, databaseServiceUrl) => {
   }
 };
 
-export { ADMIN_USERNAMES_STRING };

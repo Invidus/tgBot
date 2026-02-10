@@ -4214,6 +4214,12 @@ bot.on("photo", async (ctx) => {
 
 // Обработчик текстовых сообщений (поиск и админ-панель)
 bot.on("message", async (ctx) => {
+  // Успешная оплата может прийти как message — обрабатываем здесь на случай, если событие successful_payment не сработало
+  if (ctx.message?.successful_payment) {
+    await handleSuccessfulPayment(ctx);
+    return;
+  }
+
   const chatId = ctx.chat.id;
 
   // Проверяем состояние админ-панели
@@ -4460,7 +4466,8 @@ bot.action("subscribe_month", async (ctx) => {
       headers: { 'Content-Type': 'application/json' }
     }).catch(err => console.error('Ошибка создания записи о платеже:', err));
 
-    let description = `Подписка включает:\n• Неограниченный доступ к рецептам\n• Распознавание блюд по фото (5/день)\n• Подсчет калорий и БЖУ`;
+    const subscriptionBenefits = 'Подписка:\n• Рецепты без лимита (завтрак, обед, ужин, поиск)\n• Избранное до 10 рецептов\n• Распознавание по фото (ИИ, 5/день)\n• Дневник: калории, БЖУ, вода\n• В дневник из рецептов и по фото\n• Пошаговые рецепты';
+    let description = subscriptionBenefits;
     if (discountPercent > 0) {
       description += `\n\n🎁 Скидка ${discountPercent}%: ${basePrice}₽ → ${finalAmount}₽`;
     }
@@ -4549,7 +4556,8 @@ bot.action("subscribe_half_year", async (ctx) => {
       headers: { 'Content-Type': 'application/json' }
     }).catch(err => console.error('Ошибка создания записи о платеже:', err));
 
-    let description = `Подписка включает: неограниченный доступ к рецептам, распознавание блюд по фото (5/день), подсчет калорий. ${pricePerMonth}₽/мес`;
+    const subscriptionBenefits = 'Подписка:\n• Рецепты без лимита (завтрак, обед, ужин, поиск)\n• Избранное до 10 рецептов\n• Распознавание по фото (ИИ, 5/день)\n• Дневник: калории, БЖУ, вода\n• В дневник из рецептов и по фото\n• Пошаговые рецепты';
+    let description = `${subscriptionBenefits}\n${pricePerMonth}₽/мес`;
     if (discountPercent > 0) {
       description += `\n\n🎁 Скидка ${discountPercent}%: ${basePrice}₽ → ${finalAmount}₽`;
     }
@@ -4638,7 +4646,8 @@ bot.action("subscribe_year", async (ctx) => {
       headers: { 'Content-Type': 'application/json' }
     }).catch(err => console.error('Ошибка создания записи о платеже:', err));
 
-    let description = `Подписка включает: неограниченный доступ к рецептам, распознавание блюд по фото (5/день), подсчет калорий. ${pricePerMonth}₽/мес`;
+    const subscriptionBenefits = 'Подписка:\n• Рецепты без лимита (завтрак, обед, ужин, поиск)\n• Избранное до 10 рецептов\n• Распознавание по фото (ИИ, 5/день)\n• Дневник: калории, БЖУ, вода\n• В дневник из рецептов и по фото\n• Пошаговые рецепты';
+    let description = `${subscriptionBenefits}\n${pricePerMonth}₽/мес`;
     if (discountPercent > 0) {
       description += `\n\n🎁 Скидка ${discountPercent}%: ${basePrice}₽ → ${finalAmount}₽`;
     }
@@ -4732,15 +4741,14 @@ bot.on('pre_checkout_query', async (ctx) => {
   }
 });
 
-// Обработчик successful_payment - успешная оплата
-bot.on('successful_payment', async (ctx) => {
+// Общая обработка успешной оплаты (вызывается из successful_payment и из message)
+const handleSuccessfulPayment = async (ctx) => {
   const payment = ctx.message.successful_payment;
   const paymentId = payment.invoice_payload;
-  const yookassaPaymentId = payment.provider_payment_charge_id; // ID транзакции в ЮKassa
+  const yookassaPaymentId = payment.provider_payment_charge_id || '';
   const chatId = ctx.chat.id;
 
   try {
-    // Получаем информацию о платеже из БД
     const response = await axios.get(`${databaseServiceUrl}/payments/${paymentId}`, {
       timeout: 10000
     }).catch(() => null);
@@ -4753,7 +4761,6 @@ bot.on('successful_payment', async (ctx) => {
 
     const dbPayment = response.data.payment;
 
-    // Обновляем статус платежа в БД
     await axios.put(`${databaseServiceUrl}/payments/${paymentId}`, {
       status: 'succeeded',
       yookassaPaymentId: yookassaPaymentId
@@ -4762,17 +4769,14 @@ bot.on('successful_payment', async (ctx) => {
       headers: { 'Content-Type': 'application/json' }
     }).catch(err => console.error('Ошибка обновления платежа:', err));
 
-    // Активируем подписку
     try {
       await createSubscription(chatId, dbPayment.subscription_type, dbPayment.months);
 
-      // Сбрасываем счетчик ИИ запросов при оформлении подписки
       try {
         await resetAiRequests(chatId);
         console.log(`✅ ИИ запросы сброшены для пользователя ${chatId} при оформлении подписки`);
       } catch (error) {
         console.error('Ошибка сброса ИИ запросов при оформлении подписки:', error);
-        // Не прерываем процесс активации подписки, если сброс не удался
       }
 
       const message = `🎉 **Подписка успешно активирована!**\n\n` +
@@ -4800,6 +4804,30 @@ bot.on('successful_payment', async (ctx) => {
         }
       });
 
+      await setUserState(chatId, 0);
+      const favoritesCount = await getFavoritesCount(chatId);
+      const mainMenuKeyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "Завтрак🍏", callback_data: "breakfast" }],
+            [{ text: "Обед🍜", callback_data: "dinner" }],
+            [{ text: "Ужин🍝", callback_data: "lunch" }],
+            [{ text: "Поиск🔎", callback_data: "search" }],
+            [
+              { text: `⭐ Избранное${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`, callback_data: "favorites_list" },
+              { text: "Распознать блюдо📸", callback_data: "recognize_food" }
+            ],
+            [
+              { text: "📊 Дневник питания", callback_data: "diary_menu" },
+              { text: "💳 Подписка активна", callback_data: "subscription_menu" }
+            ],
+            [{ text: "Закрыть❌", callback_data: "close_menu" }]
+          ]
+        }
+      };
+      const menuText = "Выберите что хотите приготовить или выполните поиск по продукту";
+      await ctx.reply(menuText, mainMenuKeyboard);
+
       console.log(`✅ Подписка успешно активирована для пользователя ${chatId}, платеж ${paymentId}`);
     } catch (error) {
       console.error('Ошибка активации подписки:', error);
@@ -4809,7 +4837,9 @@ bot.on('successful_payment', async (ctx) => {
     console.error('Ошибка обработки successful_payment:', error);
     await ctx.reply("❌ Ошибка обработки платежа. Обратитесь в поддержку.");
   }
-});
+};
+
+bot.on('successful_payment', handleSuccessfulPayment);
 
 // Функция для отправки уведомлений о скором окончании подписки
 // Отправляет ровно один раз «за 3 дня» и ровно один раз «за 1 день» (Redis SET NX + запуск раз в сутки)

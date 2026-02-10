@@ -4965,6 +4965,7 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 // Глобальный перехват ошибок (в т.ч. Redis READONLY), чтобы не ронять процесс
 bot.catch((err, ctx) => {
   console.error('⚠️ Ошибка при обработке обновления:', err.message);
+  if (err.stack) console.error(err.stack);
   try {
     ctx.reply('Временная ошибка. Попробуйте через минуту.').catch(() => {});
   } catch (_) {}

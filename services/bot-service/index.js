@@ -3599,6 +3599,11 @@ bot.on("text", async (ctx, next) => {
   const text = ctx.message.text;
   const state = await getUserState(chatId);
 
+  // Админ-панель ждёт ввод (username, количество и т.д.) — передаём в bot.on("message")
+  if (getAdminState(chatId)) {
+    return next();
+  }
+
   // Поиск рецептов (state 4) — передаём в следующий обработчик (message)
   if (state === 4) {
     return next();

@@ -145,9 +145,9 @@ export const getSearchKeyboard = () => {
 // Клавиатура для меню подписки
 export const getSubscriptionKeyboard = () => {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("1 месяц - 300₽", "subscribe_month")],
-    [Markup.button.callback("6 месяцев - 1620₽ (скидка 10%)", "subscribe_half_year")],
-    [Markup.button.callback("12 месяцев - 2880₽ (скидка 20%)", "subscribe_year")],
+    [Markup.button.callback("1 месяц - 200₽", "subscribe_month")],
+    [Markup.button.callback("6 месяцев - 1080₽ (скидка 10%)", "subscribe_half_year")],
+    [Markup.button.callback("12 месяцев - 1920₽ (скидка 20%)", "subscribe_year")],
     [Markup.button.callback("◀️ Вернуться на главную", "back_to_main")]
   ]);
 };

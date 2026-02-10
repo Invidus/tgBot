@@ -4428,7 +4428,7 @@ bot.action("subscribe_month", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
 
   const chatId = ctx.chat.id;
-  const basePrice = 300;
+  const basePrice = 200;
   const months = 1;
   const subscriptionType = 'month';
 
@@ -4517,7 +4517,7 @@ bot.action("subscribe_half_year", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
 
   const chatId = ctx.chat.id;
-  const pricePerMonth = 270; // базовая цена за месяц (уже -10% за период)
+  const pricePerMonth = 180; // базовая цена за месяц (уже -10% за период)
   const months = 6;
   const basePrice = pricePerMonth * months;
   const subscriptionType = 'half_year';
@@ -4606,7 +4606,7 @@ bot.action("subscribe_year", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
 
   const chatId = ctx.chat.id;
-  const pricePerMonth = 240; // базовая цена за месяц (уже -20% за период)
+  const pricePerMonth = 160; // базовая цена за месяц (уже -20% за период)
   const months = 12;
   const basePrice = pricePerMonth * months;
   const subscriptionType = 'year';
